@@ -1,0 +1,5 @@
+.exe
+.vscode
+*.rc*
+*.txt
+ROms/
