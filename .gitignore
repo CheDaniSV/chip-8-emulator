@@ -1,5 +1,6 @@
-.exe
+*.exe
 .vscode
 *.rc*
 *.txt
-ROms/
+*.ch8
+ROMs/
