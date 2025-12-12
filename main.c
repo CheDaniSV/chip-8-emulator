@@ -18,9 +18,9 @@ uint16_t I; // Index register (points to memory locations)
 uint16_t PC; // Program Counter register
 uint8_t delay_timer; // Delay timer
 uint8_t sound_timer; // Sound timer
-uint8_t currently_loaded_font_type;
+uint8_t currently_loaded_font_type; // 0 - lowres, 1 - hires
 
-// Screen related
+// Screen & virtual display related
 uint8_t screen_w;
 uint8_t screen_h;
 uint8_t *screen;
@@ -627,7 +627,9 @@ void setScreenMode(uint8_t type) {
             screen_h = 32;
             break;
     }
-    screen = (uint8_t *)realloc(screen, screen_w * screen_h * sizeof(uint8_t));
+    if (screen == 0) {
+        screen = (uint8_t *)malloc(256 * 256 * sizeof(uint8_t));
+    }
     clearScreen();
 }
 
@@ -663,10 +665,10 @@ void setFontType(uint8_t type) {
 // Fetch / Decode / Execute Loop
 void step_one_cycle(void) {
     // Fetch
-    uint8_t b1 = memory[PC++ & 0xFFF];
+    uint8_t b1 = memory[PC++];
     uint8_t nibble1 = b1 >> 4;
     uint8_t nibble2 = b1 & 0xF;
-    uint8_t b2 = memory[PC++ & 0xFFF];
+    uint8_t b2 = memory[PC++];
     uint8_t nibble3 = b2 >> 4;
     uint8_t nibble4 = b2 & 0xF;
     uint16_t opcode = (b1 << 8) | b2;
@@ -674,14 +676,9 @@ void step_one_cycle(void) {
     // printf("%X: %X %X %X | %X %X %X %X %X\n", (PC - 2) & 0xFFF, b1, b2, opcode, nibble1, nibble2, nibble3, nibble4);
     // printf("%X: %X \n", PC-2, opcode);
 
-    // TODO: Investigate this behavior
-    // Prevents starting from 0x0 when end of the memory has been reached
-    // if ((PC & 0xFFF) < PROGRAM_START) {
-    //     jump(PROGRAM_START);
-    //     return;
-    // }
-    if ((PC - 1) == 0xFFF) {
-        PC -= 2;
+    // If end of the memory is reached
+    if (PC - 1 >= 0xFFF) {
+        jump(PROGRAM_START);
         return;
     }
 
@@ -726,7 +723,7 @@ void step_one_cycle(void) {
                     break;
                 case 0x00FD:
                     if (superchip_instructions_set) {
-                        exit(0); // TODO: maybe that should exit the program fully, just pause it and say exited or smth
+                        exit(0);
                     }
                     break;
             }
@@ -893,6 +890,7 @@ int main(void) {
 
     // Font test
     // setFontType(1);
+    // setScreenMode(2);
     // for (int i = 0; i < 16; ++i) {
     //     setVXNN(0, i);
     //     if (i < 14) {
@@ -954,7 +952,7 @@ int main(void) {
     // loadROM("ROMs/superchip8-roms/Field! [Al Roland, 1993].ch8");
     // loadROM("ROMs/superchip8-roms/Laser.ch8");
     // loadROM("ROMs/superchip8-roms/Magic Square [David Winter, 1997].ch8");
-    loadROM("ROMs/octojam1/1dcell.ch8");
+    // loadROM("ROMs/octojam1/1dcell.ch8");
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
     InitWindow(900, 600, "Chip Emulator");
