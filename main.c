@@ -1,4 +1,7 @@
 #include <raylib.h>
+// #define RAYGUI_IMPLEMENTATION
+// #include <raygui.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -12,26 +15,29 @@
 #define KEYS_NUM            16
 
 uint16_t cpu_speed; // Instructions per second
-uint8_t memory[4096] = {0};
-uint8_t V[16] = {0}; // General-purpose varibale registers (0-F)
+uint8_t memory[4096];
+uint8_t V[16]; // General-purpose varibale registers (0-F)
 uint16_t I; // Index register (points to memory locations)
 uint16_t PC; // Program Counter register
 uint8_t delay_timer; // Delay timer
 uint8_t sound_timer; // Sound timer
 uint8_t currently_loaded_font_type; // 0 - lowres, 1 - hires
+bool is_rom_loaded;
 
-// Screen & virtual display related
+// Screen and virtual display related
+uint8_t memory_heatmap[4096];
 uint8_t screen_w;
 uint8_t screen_h;
 uint8_t *screen;
-int screen_x_pos;
-int screen_y_pos;
-int screen_pixel_size;
+uint16_t display_x;
+uint16_t display_y;
+uint16_t display_px_size;
+int16_t memory_heatmap_start = 0;
 
 // Keypad input related
 bool waiting_for_key;
 int key_released_this_frame;
-uint8_t keypad[KEYS_NUM] = {0};
+int keypad[KEYS_NUM];
 int chip8_keymap[KEYS_NUM] = {
     KEY_X,    // 0
     KEY_ONE,  // 1
@@ -171,6 +177,7 @@ void loadROM(const char* path) {
     }
     fread(memory + PROGRAM_START, 1, rom_size, rom);
     fclose(rom);
+    is_rom_loaded = true;
 }
 
 // Instructions
@@ -187,8 +194,8 @@ void returnFromSubRoutine(void) {
 
 // 00CN
 void scrollDisplayDownN(uint8_t N) {
-    for (int y = screen_h - 1; y >= 0; --y) {
-        for (int x = 0; x < screen_w; ++x) {
+    for (int16_t y = screen_h - 1; y >= 0; --y) {
+        for (int16_t x = 0; x < screen_w; ++x) {
             if (y >= N) {
                 screen[screen_w * y + x] = screen[screen_w * (y - N) + x];
             }
@@ -201,8 +208,8 @@ void scrollDisplayDownN(uint8_t N) {
 
 // 00FB
 void scrollDisplayRight(void) {
-    for (int y = 0; y < screen_h; ++y) {
-        for (int x = screen_w - 1; x >= 0; --x) {
+    for (int16_t y = 0; y < screen_h; ++y) {
+        for (int16_t x = screen_w - 1; x >= 0; --x) {
             if (x > 3) {
                 screen[screen_w * y + x] = screen[screen_w * y + (x - 4)];
             } else {
@@ -214,8 +221,8 @@ void scrollDisplayRight(void) {
 
 // 00FC
 void scrollDisplayLeft(void) {
-    for (int y = 0; y < screen_h; ++y) {
-        for (int x = 0; x < screen_w; ++x) {
+    for (uint16_t y = 0; y < screen_h; ++y) {
+        for (int16_t x = 0; x < screen_w; ++x) {
             if (x < screen_w - 4) {
                 screen[screen_w * y + x] = screen[screen_w * y + (x + 4)];
             } else {
@@ -397,6 +404,8 @@ void drawHighRes(uint8_t regx_index, uint8_t regy_index) {
     V[0xF] = 0;
     for (uint8_t i = 0; i < 16; ++i) {
         uint16_t line = (memory[(I + i + i) & 0xFFF] << 8) | memory[(I + i + i + 1) & 0xFFF];
+        memory_heatmap[(I + i + i) & 0xFFF] = 0xFF;
+        memory_heatmap[(I + i + i + 1) & 0xFFF] = 0xFF;
         for (uint16_t j = 0; j < 16; ++j) {
             uint16_t pixel = (line >> (15 - j)) & 1;
             uint8_t x = x0 + j;
@@ -420,6 +429,7 @@ void draw(uint8_t regx_index, uint8_t regy_index, uint8_t length) {
     V[0xF] = 0;
     for (uint8_t i = 0; i < length; ++i) {
         uint8_t line = memory[(I + i) & 0xFFF];
+        memory_heatmap[(I + i) & 0xFFF] = 0xFF;
         for (uint8_t j = 0; j < 8; ++j) {
             uint8_t pixel = (line >> (7 - j)) & 1;
             uint16_t x = x0 + j;
@@ -507,6 +517,9 @@ void binCodedDecimalConversion(uint8_t reg_index) {
     memory[I] = V[reg_index] / 100;
     memory[I + 1] = (V[reg_index] % 100) / 10;
     memory[I + 2] = V[reg_index] % 10;
+    memory_heatmap[I] = 0xFF;
+    memory_heatmap[I + 1] = 0xFF;
+    memory_heatmap[I + 2] = 0xFF;
 }
 
 // FX55
@@ -558,12 +571,12 @@ void pollRaylibKeypadInput(void) {
     key_released_this_frame = -1;
 
     // 1. Detect held keys for EX9E & EXA1
-    for (int i = 0; i < KEYS_NUM; ++i) {
+    for (uint8_t i = 0; i < KEYS_NUM; ++i) {
         keypad[i] = IsKeyDown(chip8_keymap[i]);
     }
 
     // 2. Detect key release for FX0A
-    for (int i = 0; i < KEYS_NUM; ++i) {
+    for (uint8_t i = 0; i < KEYS_NUM; ++i) {
         if (IsKeyReleased(chip8_keymap[i])) {
             key_released_this_frame = i;
         }
@@ -652,7 +665,7 @@ void setInstructions(uint8_t type) {
 // 0 - lowres (80 bytes)
 // 1 - hires (512 bytes)
 void setFontType(uint8_t type) {
-    memset(memory + FONT_MEM_LOC, 1, PROGRAM_START - 1);
+    memset(memory + FONT_MEM_LOC, 0, PROGRAM_START - 1);
     if (type) {
         currently_loaded_font_type = 1;
         memcpy(memory + FONT_MEM_LOC, hires_font_sprites, sizeof(hires_font_sprites));
@@ -675,6 +688,9 @@ void step_one_cycle(void) {
     uint16_t addr = (nibble2 << 8) | b2; // NNN
     // printf("%X: %X %X %X | %X %X %X %X %X\n", (PC - 2) & 0xFFF, b1, b2, opcode, nibble1, nibble2, nibble3, nibble4);
     // printf("%X: %X \n", PC-2, opcode);
+
+    memory_heatmap[PC - 2] = 0xFF;
+    memory_heatmap[PC - 1] = 0xFF;
 
     // If end of the memory is reached
     if (PC - 1 >= 0xFFF) {
@@ -875,18 +891,132 @@ void step_one_cycle(void) {
     }
 }
 
-int main(void) {
-    // Initialization
+// Reset emulator to initial state
+void resetState() {
     cpu_speed = 700;
     I = PROGRAM_START;
     PC = PROGRAM_START;
     delay_timer = 0;
     sound_timer = 0;
     stack.top = -1;
+    is_rom_loaded = false;
+    memset(stack.arr, 0, MAX_STACK_SIZE);
+    memset(memory, 0, 4096);
+    memset(memory_heatmap, 0, 4096);
+    memset(V, 0, 16);
+    memset(keypad, 0, KEYS_NUM);
     setQuirks(0);
-    setInstructions(0);
+    setInstructions(1);
     setScreenMode(0);
     setFontType(0);
+}
+
+void raylibRender() {
+    BeginDrawing();
+        ClearBackground(BLACK);
+        DrawFPS(10, 10);
+        // char info1[32]; sprintf(info1);
+        // char info2[32]; sprintf(info2, "S/D timers: %d %d", sound_timer, delay_timer);
+        // char info4[32]; sprintf(info4, "Dtimer: %d", delay_timer);
+        char info1[32]; sprintf(info1, "CPU speed: %d hz", cpu_speed);
+        DrawText(info1, 10, 40, 20, WHITE);
+        // DrawText(info2, 10, 70, 20, WHITE);
+        // DrawText(info2, 10, 70, 20, WHITE);
+        // DrawText(info4, 10, 130, 20, WHITE);
+        // DrawText(info5, 10, 160, 20, WHITE);
+        // DrawText(info6, 10, 100, 20, WHITE);
+
+        int16_t margin = 0;
+        int16_t border_width = 2;
+        int16_t border_margin = 1;
+
+        Color main_color = GREEN;
+        Color secondary_color = Fade(main_color, 0.1);
+
+        int16_t memory_display_row_length = 32;
+        int16_t memory_display_row_num = 32;
+        int16_t memory_display_cell_size = 6;
+        int16_t memory_display_x = 16;
+        int16_t memory_display_margin = 1;
+        memory_display_cell_size = GetScreenWidth() * 0.25 / memory_display_row_length;
+        int16_t memory_display_y = GetScreenHeight() - (memory_display_row_num + memory_display_margin) * memory_display_cell_size -  border_margin - border_width - 32;
+
+        memory_heatmap_start -= (int16_t)GetMouseWheelMove() * memory_display_row_length;
+        if (memory_heatmap_start < 0) {
+            memory_heatmap_start = 0;
+        } else if (memory_heatmap_start >= 4096 - memory_display_row_num * memory_display_row_length) {
+            memory_heatmap_start = 4096 - memory_display_row_num * memory_display_row_length;
+        }
+
+        int16_t lud_x = memory_display_x - border_width - border_margin; // left, up, down border Xpos
+        int16_t r_x = memory_display_x + memory_display_row_length * (memory_display_cell_size + memory_display_margin) + border_margin; // right border Xpos
+        int16_t u_y = memory_display_y - border_width - border_margin; // upper border Ypos
+        int16_t d_y = memory_display_y + memory_display_row_num * (memory_display_cell_size + memory_display_margin) + border_margin; // bottom border Ypos
+        int16_t lr_y = memory_display_y - border_margin; // left, right border Ypos
+        int16_t ud_w = memory_display_row_length * (memory_display_cell_size + memory_display_margin) + 2 * border_width + 2 * border_margin; // up, down border width
+        int16_t lr_h = memory_display_row_num * (memory_display_cell_size + memory_display_margin) + 2 * border_margin; // left, right border width
+        DrawRectangle(lud_x, u_y, ud_w, border_width, main_color);
+        DrawRectangle(lud_x, d_y, ud_w, border_width, main_color);
+        DrawRectangle(lud_x, lr_y, border_width, lr_h, main_color);
+        DrawRectangle(r_x, lr_y, border_width, lr_h, main_color);
+        // DrawRectangle(memory_display_x - border_margin , lr_y, (memory_display_cell_size + memory_display_margin) * memory_display_row_length + 2 * border_margin, (memory_display_cell_size + memory_display_margin) * memory_display_row_num + 2 * border_margin, secondary_color);
+
+        for (int16_t i = memory_heatmap_start; i < memory_heatmap_start + memory_display_row_num * memory_display_row_length; ++i) {
+            Color cell_color;
+            if (i == PC) {
+                cell_color = RED;
+            } else if (i == PROGRAM_START) {
+                cell_color = DARKBLUE;
+            } else if ((currently_loaded_font_type == 0 && i < 0x50) || (currently_loaded_font_type == 1 && i < PROGRAM_START)) {
+                cell_color = BLUE;
+            } else if (memory[i] == 0x00) {
+                cell_color = DARKGRAY;
+            } else {
+                cell_color = GREEN;
+            }
+
+            DrawRectangle(memory_display_x + (i - memory_heatmap_start) % memory_display_row_length * (memory_display_cell_size + memory_display_margin),
+                          memory_display_y + (i - memory_heatmap_start) / memory_display_row_length * (memory_display_cell_size + memory_display_margin),
+                          memory_display_cell_size, memory_display_cell_size, memory_heatmap[i] == 0 ? cell_color : ColorBrightness(cell_color, (memory_heatmap[i] / 255.0) - 0.25));
+        }
+
+        display_px_size = GetScreenWidth() * 0.7 / screen_w;
+        if (display_px_size * screen_h >= (GetScreenHeight() - 16)) {
+            display_px_size = (GetScreenHeight() - 16) / screen_h;
+        }
+        display_x = GetScreenWidth() - display_px_size * screen_w - 16;
+        display_y = (GetScreenHeight() - display_px_size * screen_h) / 2;
+        if (display_y > 32) {
+            display_y = 16;
+        }
+
+        DrawRectangle(display_x - border_width - border_margin, display_y - border_width - border_margin, screen_w * display_px_size + 2 * border_width + 2 * border_margin, border_width, main_color);
+        DrawRectangle(display_x - border_width - border_margin, display_y + screen_h * display_px_size + border_margin, screen_w * display_px_size + 2 * border_width + 2 * border_margin, border_width, main_color);
+        DrawRectangle(display_x - border_width - border_margin, display_y - border_margin, border_width, screen_h * display_px_size + 2 * border_margin, main_color);
+        DrawRectangle(display_x + screen_w * display_px_size + border_margin, display_y - border_margin, border_width, screen_h * display_px_size + 2 * border_margin, main_color);
+        DrawRectangle(display_x - border_margin , display_y - border_margin, screen_w * display_px_size + 2 * border_margin, screen_h * display_px_size + 2 * border_margin, secondary_color);
+        for (int16_t y = 0; y < screen_h; ++y) {
+            for (int16_t x = 0; x < screen_w; ++x) {
+                if (screen[screen_w*y+x]) DrawRectangle(display_x + x*display_px_size + margin, display_y + y*display_px_size + margin, display_px_size - margin*2, display_px_size - margin*2, main_color);
+            }
+        }
+
+        if (!is_rom_loaded) {
+            uint16_t font_size = display_px_size * 4;
+            DrawText("Drag & Drop", display_x + display_px_size * screen_w / 2.0 - font_size * 3.0, display_y + display_px_size * screen_h / 2.0 - font_size / 2.0, font_size, main_color);
+        }
+
+        EndDrawing();
+}
+
+int main(int argc, char *argv[]) {
+    resetState();
+    if (argc == 2) {
+        loadROM(argv[1]);
+    } else if (argc > 2) {
+        printf("Got %d arguments, expected 1 (path to load a ROM from).", argc - 1);
+        return 1;
+    }
 
     // Font test
     // setFontType(1);
@@ -989,6 +1119,13 @@ int main(void) {
                 }
             }
             timer_accumulator -= TIMER_STEP;
+            for (uint16_t i = 0; i < 4096; ++i) {
+                if (memory_heatmap[i] > 0 && memory_heatmap[i] - 5 >= 0) {
+                    memory_heatmap[i] -= 5;
+                } else {
+                    memory_heatmap[i] = 0;
+                }
+            }
         }
 
         cpu_accumulator += delta_seconds * cpu_speed;
@@ -997,20 +1134,14 @@ int main(void) {
             cpu_accumulator -= 1.0;
         }
 
-        BeginDrawing();
-        ClearBackground(BLACK);
-        DrawFPS(10, 10);
-        char info1[32]; sprintf(info1, "Time: %.3f s", GetTime());
-        char info2[32]; sprintf(info2, "S/D timers: %d %d", sound_timer, delay_timer);
-        // char info4[32]; sprintf(info4, "Dtimer: %d", delay_timer);
-        // uint8_t info5[32]; sprintf(info5, "CPU_ACC: %.2f", cpu_accumulator);
-        char info6[32]; sprintf(info6, "CPU SPEED: %d hz", cpu_speed);
-        DrawText(info1, 10, 40, 20, WHITE);
-        DrawText(info2, 10, 70, 20, WHITE);
-        // DrawText(info2, 10, 70, 20, WHITE);
-        // DrawText(info4, 10, 130, 20, WHITE);
-        // DrawText(info5, 10, 160, 20, WHITE);
-        DrawText(info6, 10, 190, 20, WHITE);
+        // Raylib events
+
+        if (IsFileDropped()) {
+            FilePathList droppedFiles = LoadDroppedFiles();
+            resetState();
+            loadROM(droppedFiles.paths[0]);
+            UnloadDroppedFiles(droppedFiles);
+        }
 
         if (IsKeyPressed(KEY_I))
             setScreenMode(0);
@@ -1024,33 +1155,14 @@ int main(void) {
             scrollDisplayRight();
         if (IsKeyPressed(KEY_J))
             scrollDisplayLeft();
+        if (IsKeyPressed(KEY_M))
+            resetState();
+        if (IsKeyPressed(KEY_N))
+            jump(PROGRAM_START);
 
-        cpu_speed -= (int)GetMouseWheelMove() * 10;
+        // cpu_speed -= (uint16_t)GetMouseWheelMove() * 10;
 
-        int margin = 0;
-        int border_width = 3;
-        int border_margin = 1;
-
-        screen_pixel_size = GetScreenWidth() / 1.3 / screen_w;
-        screen_y_pos = 16;
-        if (screen_pixel_size * screen_h >= (GetScreenHeight() - screen_y_pos)) {
-            screen_pixel_size = (GetScreenHeight() - screen_y_pos) / screen_h;
-        }
-        screen_x_pos = GetScreenWidth() - screen_pixel_size * screen_w - 16;
-
-        Color border_color = LIME;
-        Color pixel_on_color = LIME;
-        Color pixel_off_color = BLACK;
-        DrawRectangle(screen_x_pos - border_width - border_margin, screen_y_pos - border_width - border_margin, screen_w * screen_pixel_size + 2 * border_width + 2 * border_margin, border_width, border_color);
-        DrawRectangle(screen_x_pos - border_width - border_margin, screen_y_pos + screen_h * screen_pixel_size + border_margin, screen_w * screen_pixel_size + 2 * border_width + 2 * border_margin, border_width, border_color);
-        DrawRectangle(screen_x_pos - border_width - border_margin, screen_y_pos - border_margin, border_width, screen_h * screen_pixel_size + 2 * border_margin, border_color);
-        DrawRectangle(screen_x_pos + screen_w * screen_pixel_size + border_margin, screen_y_pos - border_margin, border_width, screen_h * screen_pixel_size + 2 * border_margin, border_color);
-        for (int y = 0; y < screen_h; ++y) {
-            for (int x = 0; x < screen_w; ++x) {
-                DrawRectangle(screen_x_pos + x*screen_pixel_size + margin, screen_y_pos + y*screen_pixel_size + margin, screen_pixel_size - margin*2, screen_pixel_size - margin*2, screen[screen_w*y+x] ? pixel_on_color : pixel_off_color);
-            }
-        }
-        EndDrawing();
+        raylibRender();
     }
 
     CloseAudioDevice();
