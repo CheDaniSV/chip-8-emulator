@@ -29,9 +29,8 @@ uint8_t memory_heatmap[4096];
 uint8_t screen_w;
 uint8_t screen_h;
 uint8_t *screen;
-uint16_t display_x;
-uint16_t display_y;
-uint16_t display_px_size;
+uint16_t d_x; // Display x pos
+uint16_t d_y; // Display y pos
 int16_t memory_heatmap_start = 0;
 
 // Keypad input related
@@ -926,42 +925,41 @@ void raylibRender() {
         // DrawText(info5, 10, 160, 20, WHITE);
         // DrawText(info6, 10, 100, 20, WHITE);
 
-        int16_t margin = 0;
         int16_t border_width = 2;
         int16_t border_margin = 1;
+        int16_t d_margin = 0;
 
-        Color main_color = GREEN;
-        Color secondary_color = Fade(main_color, 0.1);
+        Color main_color = RED;
+        Color secondary_color = ColorBrightness(main_color, -0.9);
 
-        int16_t memory_display_row_length = 32;
-        int16_t memory_display_row_num = 32;
-        int16_t memory_display_cell_size = 6;
-        int16_t memory_display_x = 16;
-        int16_t memory_display_margin = 1;
-        memory_display_cell_size = GetScreenWidth() * 0.25 / memory_display_row_length;
-        int16_t memory_display_y = GetScreenHeight() - (memory_display_row_num + memory_display_margin) * memory_display_cell_size -  border_margin - border_width - 32;
+        int16_t md_row_length = 32;
+        int16_t md_row_num = 32;
+        int16_t md_x = 16;
+        int16_t md_margin = 1;
+        int16_t md_cell_size = GetScreenWidth() * 0.28 / md_row_length;
+        int16_t md_y = GetScreenHeight() - md_row_num * md_cell_size - 2 * border_margin - 2 * border_width - 8;
 
-        memory_heatmap_start -= (int16_t)GetMouseWheelMove() * memory_display_row_length;
-        if (memory_heatmap_start < 0) {
-            memory_heatmap_start = 0;
-        } else if (memory_heatmap_start >= 4096 - memory_display_row_num * memory_display_row_length) {
-            memory_heatmap_start = 4096 - memory_display_row_num * memory_display_row_length;
-        }
-
-        int16_t lud_x = memory_display_x - border_width - border_margin; // left, up, down border Xpos
-        int16_t r_x = memory_display_x + memory_display_row_length * (memory_display_cell_size + memory_display_margin) + border_margin; // right border Xpos
-        int16_t u_y = memory_display_y - border_width - border_margin; // upper border Ypos
-        int16_t d_y = memory_display_y + memory_display_row_num * (memory_display_cell_size + memory_display_margin) + border_margin; // bottom border Ypos
-        int16_t lr_y = memory_display_y - border_margin; // left, right border Ypos
-        int16_t ud_w = memory_display_row_length * (memory_display_cell_size + memory_display_margin) + 2 * border_width + 2 * border_margin; // up, down border width
-        int16_t lr_h = memory_display_row_num * (memory_display_cell_size + memory_display_margin) + 2 * border_margin; // left, right border width
+        int16_t lud_x = md_x - border_width - border_margin; // left, up, down border Xpos
+        int16_t r_x = md_x + md_row_length * md_cell_size + border_margin - md_margin; // right border Xpos
+        int16_t d_y = md_y + md_row_num * md_cell_size + border_margin - md_margin; // bottom border Ypos
+        int16_t u_y = md_y - border_width - border_margin; // upper border Ypos
+        int16_t lr_y = md_y - border_margin; // left, right border Ypos
+        int16_t ud_w = md_row_length * md_cell_size + 2 * border_width + 2 * border_margin - md_margin; // up, down border width
+        int16_t lr_h = md_row_num * md_cell_size + 2 * border_margin - md_margin; // left, right border width
+        DrawRectangle(md_x - border_margin, md_y - border_margin, md_cell_size * md_row_length + 2 * border_margin - md_margin, md_cell_size * md_row_num + 2 * border_margin - md_margin, BLACK);
         DrawRectangle(lud_x, u_y, ud_w, border_width, main_color);
         DrawRectangle(lud_x, d_y, ud_w, border_width, main_color);
         DrawRectangle(lud_x, lr_y, border_width, lr_h, main_color);
         DrawRectangle(r_x, lr_y, border_width, lr_h, main_color);
-        // DrawRectangle(memory_display_x - border_margin , lr_y, (memory_display_cell_size + memory_display_margin) * memory_display_row_length + 2 * border_margin, (memory_display_cell_size + memory_display_margin) * memory_display_row_num + 2 * border_margin, secondary_color);
 
-        for (int16_t i = memory_heatmap_start; i < memory_heatmap_start + memory_display_row_num * memory_display_row_length; ++i) {
+        memory_heatmap_start -= (int16_t)GetMouseWheelMove() * md_row_length;
+        if (memory_heatmap_start < 0) {
+            memory_heatmap_start = 0;
+        } else if (memory_heatmap_start >= 4096 - md_row_num * md_row_length) {
+            memory_heatmap_start = 4096 - md_row_num * md_row_length;
+        }
+
+        for (int16_t i = memory_heatmap_start; i < memory_heatmap_start + md_row_num * md_row_length; ++i) {
             Color cell_color;
             if (i == PC) {
                 cell_color = RED;
@@ -974,36 +972,38 @@ void raylibRender() {
             } else {
                 cell_color = GREEN;
             }
-
-            DrawRectangle(memory_display_x + (i - memory_heatmap_start) % memory_display_row_length * (memory_display_cell_size + memory_display_margin),
-                          memory_display_y + (i - memory_heatmap_start) / memory_display_row_length * (memory_display_cell_size + memory_display_margin),
-                          memory_display_cell_size, memory_display_cell_size, memory_heatmap[i] == 0 ? cell_color : ColorBrightness(cell_color, (memory_heatmap[i] / 255.0) - 0.25));
+            double brightness = (memory_heatmap[i] / 255.0) - 0.3;
+            if (brightness < 0) brightness = 0;
+            DrawRectangle(md_x + (i - memory_heatmap_start) % md_row_length * md_cell_size,
+                          md_y + (i - memory_heatmap_start) / md_row_length * md_cell_size,
+                          md_cell_size - md_margin, md_cell_size - md_margin, memory_heatmap[i] == 0 ? cell_color : ColorBrightness(cell_color, brightness));
         }
 
-        display_px_size = GetScreenWidth() * 0.7 / screen_w;
-        if (display_px_size * screen_h >= (GetScreenHeight() - 16)) {
-            display_px_size = (GetScreenHeight() - 16) / screen_h;
+        uint16_t d_px_size = GetScreenWidth() * 0.7 / screen_w;
+        if (d_px_size * screen_h >= (GetScreenHeight() - 16)) {
+            d_px_size = (GetScreenHeight() - 16) / screen_h;
         }
-        display_x = GetScreenWidth() - display_px_size * screen_w - 16;
-        display_y = (GetScreenHeight() - display_px_size * screen_h) / 2;
-        if (display_y > 32) {
-            display_y = 16;
+        d_x = GetScreenWidth() - d_px_size * screen_w - 2 * border_margin - 2 * border_width - 12;
+        d_y = (GetScreenHeight() - d_px_size * screen_h - 2 * border_margin - 2 * border_width) / 2;
+        if (d_y > 32) {
+            d_y = 16;
         }
 
-        DrawRectangle(display_x - border_width - border_margin, display_y - border_width - border_margin, screen_w * display_px_size + 2 * border_width + 2 * border_margin, border_width, main_color);
-        DrawRectangle(display_x - border_width - border_margin, display_y + screen_h * display_px_size + border_margin, screen_w * display_px_size + 2 * border_width + 2 * border_margin, border_width, main_color);
-        DrawRectangle(display_x - border_width - border_margin, display_y - border_margin, border_width, screen_h * display_px_size + 2 * border_margin, main_color);
-        DrawRectangle(display_x + screen_w * display_px_size + border_margin, display_y - border_margin, border_width, screen_h * display_px_size + 2 * border_margin, main_color);
-        DrawRectangle(display_x - border_margin , display_y - border_margin, screen_w * display_px_size + 2 * border_margin, screen_h * display_px_size + 2 * border_margin, secondary_color);
+        DrawRectangle(d_x - border_margin, d_y - border_margin, screen_w * d_px_size + 2 * border_margin - d_margin, screen_h * d_px_size + 2 * border_margin - d_margin, secondary_color);
+        DrawRectangle(d_x - border_width - border_margin, d_y - border_width - border_margin, screen_w * d_px_size + 2 * border_width + 2 * border_margin - d_margin, border_width, main_color);
+        DrawRectangle(d_x - border_width - border_margin, d_y + screen_h * d_px_size + border_margin - d_margin, screen_w * d_px_size + 2 * border_width + 2 * border_margin - d_margin, border_width, main_color);
+        DrawRectangle(d_x - border_width - border_margin, d_y - border_margin, border_width, screen_h * d_px_size + 2 * border_margin - d_margin, main_color);
+        DrawRectangle(d_x + screen_w * d_px_size + border_margin - d_margin, d_y - border_margin, border_width, screen_h * d_px_size + 2 * border_margin - d_margin, main_color);
+
         for (int16_t y = 0; y < screen_h; ++y) {
             for (int16_t x = 0; x < screen_w; ++x) {
-                if (screen[screen_w*y+x]) DrawRectangle(display_x + x*display_px_size + margin, display_y + y*display_px_size + margin, display_px_size - margin*2, display_px_size - margin*2, main_color);
+                if (screen[screen_w*y+x]) DrawRectangle(d_x + x * d_px_size, d_y + y * d_px_size, d_px_size - d_margin, d_px_size - d_margin, main_color);
             }
         }
 
         if (!is_rom_loaded) {
-            uint16_t font_size = display_px_size * 4;
-            DrawText("Drag & Drop", display_x + display_px_size * screen_w / 2.0 - font_size * 3.0, display_y + display_px_size * screen_h / 2.0 - font_size / 2.0, font_size, main_color);
+            uint16_t font_size = d_px_size * 4;
+            DrawText("Drag & Drop", d_x + d_px_size * screen_w / 2.0 - font_size * 3.0, d_y + d_px_size * screen_h / 2.0 - font_size / 2.0, font_size, main_color);
         }
 
         EndDrawing();
