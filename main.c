@@ -1,6 +1,6 @@
 #include <raylib.h>
-// #define RAYGUI_IMPLEMENTATION
-// #include <raygui.h>
+#define RAYGUI_IMPLEMENTATION
+#include <raygui.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +14,7 @@
 #define PROGRAM_START       0x200
 #define KEYS_NUM            16
 
-uint16_t cpu_speed; // Instructions per second
+uint16_t cpu_speed = 700; // Instructions per second
 uint8_t memory[4096];
 uint8_t V[16]; // General-purpose varibale registers (0-F)
 uint16_t I; // Index register (points to memory locations)
@@ -24,7 +24,7 @@ uint8_t sound_timer; // Sound timer
 uint8_t currently_loaded_font_type; // 0 - lowres, 1 - hires
 bool is_rom_loaded;
 
-// Screen and virtual display related
+// Screen, display, UI related
 uint8_t memory_heatmap[4096];
 uint8_t screen_w;
 uint8_t screen_h;
@@ -32,28 +32,49 @@ uint8_t *screen;
 uint16_t d_x; // Display x pos
 uint16_t d_y; // Display y pos
 int16_t memory_heatmap_start = 0;
+bool fullscreen_mode = false;
+bool show_instruction = false;
+char quirks_button_text[3] = "CH";
+int16_t d_margin = 0;
+const uint8_t styles_count = 12;
+uint8_t current_style = 3;
+Color style_colors[12] = {
+    YELLOW,
+    GOLD,
+    PINK,
+    RED,
+    GREEN,
+    LIME,
+    BLUE,
+    SKYBLUE,
+    PURPLE,
+    VIOLET,
+    WHITE,
+    BLACK
+};
+bool dark_mode = true;
 
 // Keypad input related
 bool waiting_for_key;
 int key_released_this_frame;
 int keypad[KEYS_NUM];
 int chip8_keymap[KEYS_NUM] = {
-    KEY_X,    // 0
-    KEY_ONE,  // 1
-    KEY_TWO,  // 2
-    KEY_THREE,// 3
-    KEY_Q,    // 4
-    KEY_W,    // 5
-    KEY_E,    // 6
-    KEY_A,    // 7
-    KEY_S,    // 8
-    KEY_D,    // 9
-    KEY_Z,    // A
-    KEY_C,    // B
-    KEY_FOUR, // C
-    KEY_R,    // D
-    KEY_F,    // E
-    KEY_V     // F
+    KEY_X,     // 0
+    KEY_ONE,   // 1
+    KEY_TWO,   // 2
+    KEY_THREE, // 3
+    KEY_Q,     // 4
+    KEY_W,     // 5
+    KEY_E,     // 6
+    KEY_A,     // 7
+    KEY_S,     // 8
+    KEY_D,     // 9
+    KEY_Z,     // A
+    KEY_C,     // B
+    KEY_FOUR,  // C
+    KEY_R,     // D
+    KEY_F,     // E
+    KEY_V      // F
 };
 
 // Configuration variables related to quirks of superchip
@@ -611,8 +632,7 @@ Sound generateBeep(int frequency) {
 
 // Type:
 // 0 - CHIP-8
-// 1 - HIRES
-// 1 - SuperChip (modern) 128x64
+// 1 - SUPER-CHIP
 void setQuirks(uint8_t type) {
     superchip_shift = type;
     superchip_offset_jump = type;
@@ -892,7 +912,6 @@ void step_one_cycle(void) {
 
 // Reset emulator to initial state
 void resetState() {
-    cpu_speed = 700;
     I = PROGRAM_START;
     PC = PROGRAM_START;
     delay_timer = 0;
@@ -904,112 +923,259 @@ void resetState() {
     memset(memory_heatmap, 0, 4096);
     memset(V, 0, 16);
     memset(keypad, 0, KEYS_NUM);
-    setQuirks(0);
-    setInstructions(1);
     setScreenMode(0);
     setFontType(0);
 }
 
-void raylibRender() {
-    BeginDrawing();
-        ClearBackground(BLACK);
-        DrawFPS(10, 10);
-        // char info1[32]; sprintf(info1);
-        // char info2[32]; sprintf(info2, "S/D timers: %d %d", sound_timer, delay_timer);
-        // char info4[32]; sprintf(info4, "Dtimer: %d", delay_timer);
-        char info1[32]; sprintf(info1, "CPU speed: %d hz", cpu_speed);
-        DrawText(info1, 10, 40, 20, WHITE);
-        // DrawText(info2, 10, 70, 20, WHITE);
-        // DrawText(info2, 10, 70, 20, WHITE);
-        // DrawText(info4, 10, 130, 20, WHITE);
-        // DrawText(info5, 10, 160, 20, WHITE);
-        // DrawText(info6, 10, 100, 20, WHITE);
+void raylibProcess() {
 
+    // Raylib events
+    if (IsFileDropped()) {
+        FilePathList droppedFiles = LoadDroppedFiles();
+        resetState();
+        loadROM(droppedFiles.paths[0]);
+        UnloadDroppedFiles(droppedFiles);
+    }
+
+    if (IsKeyPressed(KEY_L))
+        resetState();
+    if (IsKeyPressed(KEY_K)) {
+        clearScreen();
+        jump(PROGRAM_START);
+    }
+    if (IsKeyPressed(KEY_J)) fullscreen_mode = !fullscreen_mode;
+
+    BeginDrawing();
         int16_t border_width = 2;
         int16_t border_margin = 1;
-        int16_t d_margin = 0;
+        uint16_t d_px_size = 0;
 
-        Color main_color = RED;
-        Color secondary_color = ColorBrightness(main_color, -0.9);
+        Color main_foreground = style_colors[current_style];
+        Color main_background;
+        if (dark_mode)
+            main_background = ColorBrightness(main_foreground, -0.95);
+        else
+            main_background = ColorBrightness(main_foreground, 0.9);
+        Color secondary_color = Fade(main_foreground, 0.1);
+        ClearBackground(main_background);
+        Color main_text_color;
+        if (main_background.r + main_background.g + main_background.b < 128)
+            main_text_color = WHITE;
+        else 
+            main_text_color = BLACK;
 
-        int16_t md_row_length = 32;
-        int16_t md_row_num = 32;
-        int16_t md_x = 16;
-        int16_t md_margin = 1;
-        int16_t md_cell_size = GetScreenWidth() * 0.28 / md_row_length;
-        int16_t md_y = GetScreenHeight() - md_row_num * md_cell_size - 2 * border_margin - 2 * border_width - 8;
+        // Generate style base on theme color
+        GuiSetStyle(BUTTON, BORDER_COLOR_NORMAL, ColorToInt(main_foreground));
+        GuiSetStyle(BUTTON, BASE_COLOR_NORMAL, ColorToInt(secondary_color));
+        GuiSetStyle(BUTTON, TEXT_COLOR_NORMAL, ColorToInt(main_text_color));
+        // GuiSetStyle(BUTTON, TEXT_PADDING, 0);
+        // GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
+        
+        GuiSetStyle(BUTTON, BORDER_COLOR_FOCUSED, ColorToInt(ColorBrightness(main_foreground, -0.3)));
+        GuiSetStyle(BUTTON, BASE_COLOR_FOCUSED, ColorToInt(ColorBrightness(secondary_color, -0.5)));
+        GuiSetStyle(BUTTON, TEXT_COLOR_FOCUSED, ColorToInt(ColorBrightness(main_text_color, -0.3)));
+        
+        GuiSetStyle(BUTTON, BORDER_COLOR_PRESSED, ColorToInt(ColorBrightness(main_foreground, 0.3)));
+        GuiSetStyle(BUTTON, BASE_COLOR_PRESSED, ColorToInt(ColorBrightness(secondary_color, 0.5)));
+        GuiSetStyle(BUTTON, TEXT_COLOR_PRESSED, ColorToInt(ColorBrightness(main_text_color, 0.3)));
 
-        int16_t lud_x = md_x - border_width - border_margin; // left, up, down border Xpos
-        int16_t r_x = md_x + md_row_length * md_cell_size + border_margin - md_margin; // right border Xpos
-        int16_t d_y = md_y + md_row_num * md_cell_size + border_margin - md_margin; // bottom border Ypos
-        int16_t u_y = md_y - border_width - border_margin; // upper border Ypos
-        int16_t lr_y = md_y - border_margin; // left, right border Ypos
-        int16_t ud_w = md_row_length * md_cell_size + 2 * border_width + 2 * border_margin - md_margin; // up, down border width
-        int16_t lr_h = md_row_num * md_cell_size + 2 * border_margin - md_margin; // left, right border width
-        DrawRectangle(md_x - border_margin, md_y - border_margin, md_cell_size * md_row_length + 2 * border_margin - md_margin, md_cell_size * md_row_num + 2 * border_margin - md_margin, BLACK);
-        DrawRectangle(lud_x, u_y, ud_w, border_width, main_color);
-        DrawRectangle(lud_x, d_y, ud_w, border_width, main_color);
-        DrawRectangle(lud_x, lr_y, border_width, lr_h, main_color);
-        DrawRectangle(r_x, lr_y, border_width, lr_h, main_color);
-
-        memory_heatmap_start -= (int16_t)GetMouseWheelMove() * md_row_length;
-        if (memory_heatmap_start < 0) {
-            memory_heatmap_start = 0;
-        } else if (memory_heatmap_start >= 4096 - md_row_num * md_row_length) {
-            memory_heatmap_start = 4096 - md_row_num * md_row_length;
-        }
-
-        for (int16_t i = memory_heatmap_start; i < memory_heatmap_start + md_row_num * md_row_length; ++i) {
-            Color cell_color;
-            if (i == PC) {
-                cell_color = RED;
-            } else if (i == PROGRAM_START) {
-                cell_color = DARKBLUE;
-            } else if ((currently_loaded_font_type == 0 && i < 0x50) || (currently_loaded_font_type == 1 && i < PROGRAM_START)) {
-                cell_color = BLUE;
-            } else if (memory[i] == 0x00) {
-                cell_color = DARKGRAY;
-            } else {
-                cell_color = GREEN;
+    
+        if (fullscreen_mode) {
+            uint16_t scaleX = (GetScreenWidth() - 2 * border_margin - 2 * border_width) / screen_w;
+            uint16_t scaleY = (GetScreenHeight() - 2 * border_margin - 2 * border_width) / screen_h;
+            d_px_size = (scaleX < scaleY) ? scaleX : scaleY;
+            d_x = (GetScreenWidth() - d_px_size * screen_w - 2 * border_margin - 2 * border_width) / 2;
+            d_y = (GetScreenHeight() - d_px_size * screen_h - 2 * border_margin - 2 * border_width) / 2;
+        } else {
+            d_px_size = GetScreenWidth() * 0.7 / screen_w;
+            if ((d_px_size * screen_h + 2 * border_margin + 2 * border_width) > GetScreenHeight()) {
+                d_px_size = GetScreenHeight() / screen_h;
             }
-            double brightness = (memory_heatmap[i] / 255.0) - 0.3;
-            if (brightness < 0) brightness = 0;
-            DrawRectangle(md_x + (i - memory_heatmap_start) % md_row_length * md_cell_size,
-                          md_y + (i - memory_heatmap_start) / md_row_length * md_cell_size,
-                          md_cell_size - md_margin, md_cell_size - md_margin, memory_heatmap[i] == 0 ? cell_color : ColorBrightness(cell_color, brightness));
-        }
-
-        uint16_t d_px_size = GetScreenWidth() * 0.7 / screen_w;
-        if (d_px_size * screen_h >= (GetScreenHeight() - 16)) {
-            d_px_size = (GetScreenHeight() - 16) / screen_h;
-        }
-        d_x = GetScreenWidth() - d_px_size * screen_w - 2 * border_margin - 2 * border_width - 12;
-        d_y = (GetScreenHeight() - d_px_size * screen_h - 2 * border_margin - 2 * border_width) / 2;
-        if (d_y > 32) {
-            d_y = 16;
+            d_x = GetScreenWidth() - d_px_size * screen_w - 2 * border_margin - 2 * border_width - 8;
+            d_y = 16 + border_margin + border_width;
         }
 
         DrawRectangle(d_x - border_margin, d_y - border_margin, screen_w * d_px_size + 2 * border_margin - d_margin, screen_h * d_px_size + 2 * border_margin - d_margin, secondary_color);
-        DrawRectangle(d_x - border_width - border_margin, d_y - border_width - border_margin, screen_w * d_px_size + 2 * border_width + 2 * border_margin - d_margin, border_width, main_color);
-        DrawRectangle(d_x - border_width - border_margin, d_y + screen_h * d_px_size + border_margin - d_margin, screen_w * d_px_size + 2 * border_width + 2 * border_margin - d_margin, border_width, main_color);
-        DrawRectangle(d_x - border_width - border_margin, d_y - border_margin, border_width, screen_h * d_px_size + 2 * border_margin - d_margin, main_color);
-        DrawRectangle(d_x + screen_w * d_px_size + border_margin - d_margin, d_y - border_margin, border_width, screen_h * d_px_size + 2 * border_margin - d_margin, main_color);
+        DrawRectangle(d_x - border_width - border_margin, d_y - border_width - border_margin, screen_w * d_px_size + 2 * border_width + 2 * border_margin - d_margin, border_width, main_foreground);
+        DrawRectangle(d_x - border_width - border_margin, d_y + screen_h * d_px_size + border_margin - d_margin, screen_w * d_px_size + 2 * border_width + 2 * border_margin - d_margin, border_width, main_foreground);
+        DrawRectangle(d_x - border_width - border_margin, d_y - border_margin, border_width, screen_h * d_px_size + 2 * border_margin - d_margin, main_foreground);
+        DrawRectangle(d_x + screen_w * d_px_size + border_margin - d_margin, d_y - border_margin, border_width, screen_h * d_px_size + 2 * border_margin - d_margin, main_foreground);
 
         for (int16_t y = 0; y < screen_h; ++y) {
             for (int16_t x = 0; x < screen_w; ++x) {
-                if (screen[screen_w*y+x]) DrawRectangle(d_x + x * d_px_size, d_y + y * d_px_size, d_px_size - d_margin, d_px_size - d_margin, main_color);
+                if (screen[screen_w*y+x]) DrawRectangle(d_x + x * d_px_size, d_y + y * d_px_size, d_px_size - d_margin, d_px_size - d_margin, main_foreground);
+            }
+        }
+
+        int16_t md_row_length = 32;
+        int16_t md_row_num = 32;
+        int16_t md_x = 16 + border_margin;
+        int16_t md_margin = 1;
+        int16_t md_cell_size = (d_x - 32) / md_row_length;
+        if ((md_cell_size * md_row_length + 2 * border_margin + 2 * border_width) > GetScreenWidth() * 0.3)
+            md_cell_size = GetScreenWidth() * 0.3 / md_row_length;
+        // int16_t md_y = GetScreenHeight() - md_row_num * md_cell_size - 2 * border_margin - 2 * border_width - 8;
+        // int16_t md_y = d_y + d_px_size * screen_h - md_row_num * md_cell_size;
+        int16_t md_y = 16 + border_margin + border_width;
+        int16_t md_lud_x = md_x - border_width - border_margin; // left, up, down border Xpos
+        int16_t md_r_x = md_x + md_row_length * md_cell_size + border_margin - md_margin; // right border Xpos
+        int16_t md_d_y = md_y + md_row_num * md_cell_size + border_margin - md_margin; // bottom border Ypos
+        int16_t md_u_y = md_y - border_width - border_margin; // upper border Ypos
+        int16_t md_lr_y = md_y - border_margin; // left, right border Ypos
+        int16_t md_ud_w = md_row_length * md_cell_size + 2 * border_width + 2 * border_margin - md_margin; // up, down border width
+        int16_t md_lr_h = md_row_num * md_cell_size + 2 * border_margin - md_margin; // left, right border hight
+        
+        // Memory heatmap display
+        if (!fullscreen_mode) {
+            DrawRectangle(md_x - border_margin, md_y - border_margin, md_cell_size * md_row_length + 2 * border_margin - md_margin, md_cell_size * md_row_num + 2 * border_margin - md_margin, secondary_color);
+            DrawRectangle(md_lud_x, md_u_y, md_ud_w, border_width, main_foreground);
+            DrawRectangle(md_lud_x, md_d_y, md_ud_w, border_width, main_foreground);
+            DrawRectangle(md_lud_x, md_lr_y, border_width, md_lr_h, main_foreground);
+            DrawRectangle(md_r_x, md_lr_y, border_width, md_lr_h, main_foreground);
+
+            if (GetMouseX() > md_lud_x && GetMouseX() < md_r_x && GetMouseY() < md_d_y && GetMouseY() > md_u_y) {
+                memory_heatmap_start -= (int16_t)GetMouseWheelMove() * md_row_length;
+            }
+            if (memory_heatmap_start < 0) {
+                memory_heatmap_start = 0;
+            } else if (memory_heatmap_start >= 4096 - md_row_num * md_row_length) {
+                memory_heatmap_start = 4096 - md_row_num * md_row_length;
+            }
+
+            for (int16_t i = memory_heatmap_start; i < memory_heatmap_start + md_row_num * md_row_length; ++i) {
+                Color cell_color;
+                if (i == PC) {
+                    cell_color = RED;
+                } else if (i == PROGRAM_START) {
+                    cell_color = DARKBLUE;
+                } else if ((currently_loaded_font_type == 0 && i < 0x50) || (currently_loaded_font_type == 1 && i < PROGRAM_START)) {
+                    cell_color = BLUE;
+                } else if (memory[i] == 0x00) {
+                    cell_color = DARKGRAY;
+                } else {
+                    cell_color = GREEN;
+                }
+                double brightness = (memory_heatmap[i] / 255.0) - 0.3;
+                if (brightness < 0) brightness = 0;
+                DrawRectangle(md_x + (i - memory_heatmap_start) % md_row_length * md_cell_size,
+                            md_y + (i - memory_heatmap_start) / md_row_length * md_cell_size,
+                            md_cell_size - md_margin, md_cell_size - md_margin, memory_heatmap[i] == 0 ? cell_color : ColorBrightness(cell_color, brightness));
             }
         }
 
         if (!is_rom_loaded) {
             uint16_t font_size = d_px_size * 4;
-            DrawText("Drag & Drop", d_x + d_px_size * screen_w / 2.0 - font_size * 3.0, d_y + d_px_size * screen_h / 2.0 - font_size / 2.0, font_size, main_color);
+            DrawText("Drag & Drop", d_x + d_px_size * screen_w / 2.0 - font_size * 3.0, d_y + d_px_size * screen_h / 2.0 - font_size / 2.0, font_size, main_foreground);
+        }
+
+        if (!fullscreen_mode) {
+            // Draw registers
+            for (int i = 0; i < 16; ++i) {
+                char reg_info[16];
+                if (V[i] < 0x10) {
+                    sprintf(reg_info, "%X: 0%X", i, V[i]);
+                } else {
+                    sprintf(reg_info, "%X: %X", i, V[i]);
+                }
+                if (i < 8)
+                    DrawText(reg_info, md_x + i * md_cell_size * 4, md_y + md_lr_h + 12, md_cell_size, main_text_color);
+                else 
+                    DrawText(reg_info, md_x + i % 8 * md_cell_size * 4, md_y + md_lr_h + 16 + md_cell_size, md_cell_size, main_text_color);
+            }
+
+            uint16_t button_size_with_margin = md_ud_w / 5;
+            if (button_size_with_margin > 64)
+                button_size_with_margin = 64;
+            uint16_t button_y_dest = md_y + md_lr_h + 16 + md_cell_size + 20;
+            uint16_t button_x_dest = md_x - border_margin - border_width;
+            uint16_t button_margin = 4;
+            uint16_t button_size = button_size_with_margin - button_margin;
+
+            if (GuiButton((Rectangle){ button_x_dest, button_y_dest, button_size, button_size}, "help")) show_instruction = !show_instruction; // 193 - ?
+            if (GuiButton((Rectangle){ button_x_dest + button_size_with_margin, button_y_dest, button_size, button_size}, "#107#")) fullscreen_mode = true;
+            if (GuiButton((Rectangle){ button_x_dest + 2 * button_size_with_margin, button_y_dest, button_size, button_size}, dark_mode ? "#157#" : "#156#")) {
+                if (current_style != 10 && current_style != 11)
+                    dark_mode = !dark_mode;
+            }
+            if (GuiButton((Rectangle){ button_x_dest + 3 * button_size_with_margin, button_y_dest, button_size, button_size}, "#29#")) {
+                if (current_style + 1 < styles_count)
+                    ++current_style;
+                else
+                    current_style = 0;
+                if (current_style == 11)
+                    dark_mode = false;
+                else if (current_style == 10)
+                    dark_mode = true;
+                else if (current_style == 0)
+                    dark_mode = false;
+            }
+
+            char d_margin_text[4]; sprintf(d_margin_text, "%dpx", d_margin);
+            if (GuiButton((Rectangle){ button_x_dest + 4 * button_size_with_margin, button_y_dest, button_size, button_size}, d_margin_text)) {
+                if (d_margin == 0)
+                    d_margin = 1;
+                else if (d_margin == 1)
+                    d_margin = 2;
+                else if (d_margin == 2)
+                    d_margin = 0;
+            }
+
+            if (GuiButton((Rectangle){ button_x_dest, button_y_dest + button_size + button_margin, button_size, button_size}, quirks_button_text)) {
+                if (quirks_button_text[0] == 'S') {
+                    setQuirks(0);
+                    quirks_button_text[0] = 'C';
+                    quirks_button_text[1] = 'H';
+                } else {
+                    setQuirks(1);
+                    quirks_button_text[0] = 'S';
+                    quirks_button_text[1] = 'C';
+                }
+            }
+
+            if (GetMouseX() >= button_x_dest + button_size_with_margin && GetMouseX() <= button_x_dest + button_size_with_margin + button_size
+                && GetMouseY() >= button_y_dest + button_size + button_margin && GetMouseY() <= button_y_dest + 2 * button_size + button_margin
+                ) {
+                cpu_speed -= (uint16_t)GetMouseWheelMove();
+            }
+            char cpu_speed_text[16]; sprintf(cpu_speed_text, "%dhz", cpu_speed);
+            if (GuiButton((Rectangle){ button_x_dest + button_size_with_margin, button_y_dest + button_size + button_margin, button_size, button_size}, cpu_speed_text) ||
+            IsKeyPressed(KEY_H)) {
+                if (cpu_speed < 700)
+                    cpu_speed = 700;
+                else if (cpu_speed < 1000 && cpu_speed >= 700)
+                    cpu_speed = 1000;
+                else if (cpu_speed < 1500 && cpu_speed >= 1000)
+                    cpu_speed = 1500;
+                else if (cpu_speed < 2100 && cpu_speed >= 1500)
+                    cpu_speed = 2100;
+                else if (cpu_speed >= 2100)
+                    cpu_speed = 0;
+            };
+            if (GuiButton((Rectangle){ button_x_dest + 2 * button_size_with_margin, button_y_dest + button_size + button_margin, button_size, button_size}, "#76#")) {
+                clearScreen();
+                jump(PROGRAM_START);
+            };
+
+            GuiButton((Rectangle){ button_x_dest + 3 * button_size_with_margin, button_y_dest + button_size + button_margin, button_size, button_size}, "#132#");
+            GuiButton((Rectangle){ button_x_dest + 4 * button_size_with_margin, button_y_dest + button_size + button_margin, button_size, button_size}, "#131#");
+        } else {
+            GuiSetStyle(BUTTON, BASE_COLOR_NORMAL, ColorToInt(main_background)); // To keep base_color opaque
+            GuiSetStyle(BUTTON, BASE_COLOR_FOCUSED, ColorToInt(main_background));
+            GuiSetStyle(BUTTON, BASE_COLOR_PRESSED, ColorToInt(main_background));
+            if (GuiButton((Rectangle){ 16, GetScreenHeight() - 48, 32, 32}, "#103#"))
+                fullscreen_mode = false;
+        }
+
+        if (show_instruction) {
+            DrawRectangle(16, 16, GetScreenWidth() - 32, GetScreenHeight() - 32, Fade(YELLOW, 0.8));
         }
 
         EndDrawing();
 }
 
 int main(int argc, char *argv[]) {
+    setQuirks(0);
+    setInstructions(1);
     resetState();
     if (argc == 2) {
         loadROM(argv[1]);
@@ -1086,7 +1252,7 @@ int main(int argc, char *argv[]) {
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
     InitWindow(900, 600, "Chip Emulator");
-    SetWindowMinSize(600, 400);
+    SetWindowMinSize(850, 500);
     SetTargetFPS(60);
     InitAudioDevice();
     Sound beep = generateBeep(440);
@@ -1134,35 +1300,7 @@ int main(int argc, char *argv[]) {
             cpu_accumulator -= 1.0;
         }
 
-        // Raylib events
-
-        if (IsFileDropped()) {
-            FilePathList droppedFiles = LoadDroppedFiles();
-            resetState();
-            loadROM(droppedFiles.paths[0]);
-            UnloadDroppedFiles(droppedFiles);
-        }
-
-        if (IsKeyPressed(KEY_I))
-            setScreenMode(0);
-        if (IsKeyPressed(KEY_O))
-            setScreenMode(1);
-        if (IsKeyPressed(KEY_P))
-            setScreenMode(2);
-        if (IsKeyPressed(KEY_L))
-            scrollDisplayDownN(8);
-        if (IsKeyPressed(KEY_K))
-            scrollDisplayRight();
-        if (IsKeyPressed(KEY_J))
-            scrollDisplayLeft();
-        if (IsKeyPressed(KEY_M))
-            resetState();
-        if (IsKeyPressed(KEY_N))
-            jump(PROGRAM_START);
-
-        // cpu_speed -= (uint16_t)GetMouseWheelMove() * 10;
-
-        raylibRender();
+        raylibProcess();
     }
 
     CloseAudioDevice();
