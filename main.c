@@ -178,7 +178,7 @@ typedef struct
 Stack stack; // 16-bit stack of memory addresses
 
 bool isStackEmpty(void) {
-    stack.top == -1;
+    return stack.top == -1;
 }
 
 bool isStackFull(void) {
@@ -194,7 +194,7 @@ void pushToStack(uint16_t value) {
 
 uint16_t popFromStack(void) {
     if (isStackEmpty()) {
-        return 1;
+        return 0;
     }
     return stack.arr[(stack.top)--];
 }
@@ -1104,7 +1104,7 @@ void raylibProcess() {
         GuiSetStyle(BUTTON, TEXT_COLOR_FOCUSED, ColorToInt(ColorBrightness(main_text_color, -0.3)));
         GuiSetStyle(BUTTON, TEXT_COLOR_NORMAL, ColorToInt(main_text_color));
 
-        // Style for messagebox, instruction window // TODO: It that correct?
+        // Style for messagebox, instruction window
         GuiSetStyle(STATUSBAR, BORDER_COLOR_NORMAL, ColorToInt(main_foreground));
         GuiSetStyle(STATUSBAR, BASE_COLOR_NORMAL, ColorToInt(main_background));
         GuiSetStyle(STATUSBAR, TEXT_COLOR_NORMAL, ColorToInt(main_text_color));
@@ -1221,7 +1221,7 @@ void raylibProcess() {
         }
 
         if (!fullscreen_mode) {
-            // Draw registers
+            // Draw registers, I, PC, CURRENT_OPCODE, STACK TOP
             for (int i = 0; i < 16; ++i) {
                 char reg_info[16];
                 if (V[i] < 0x10) {
@@ -1237,22 +1237,51 @@ void raylibProcess() {
             char pc_info[16];
             char i_info[16];
             char opcode_info[16];
+            char stack_top_info[16];
+
             if (I < 0x10)
-                sprintf(i_info, "i: 00%X", I);
+                sprintf(i_info, "I: 00%X", I);
             else if (I < 0x100)
-                sprintf(i_info, "i: 0%X", I);
+                sprintf(i_info, "I: 0%X", I);
             else
-                sprintf(i_info, "i: %X", I);
+                sprintf(i_info, "I: %X", I);
+
             if (PC < 0x10)
-                sprintf(pc_info, "i: 00%X", PC);
+                sprintf(pc_info, "PC: 00%X", PC);
             else if (PC < 0x100)
-                sprintf(pc_info, "i: 0%X", PC);
+                sprintf(pc_info, "PC: 0%X", PC);
             else
-                sprintf(pc_info, "i: %X", PC);
-            sprintf(opcode_info, "OP: %X", ((memory[PC] << 8) | memory[PC + 1]));
+                sprintf(pc_info, "PC: %X", PC);
+
+            uint16_t opcode = (memory[PC] << 8) | memory[PC + 1];
+            if (opcode < 0x10)
+                sprintf(opcode_info, "OP: 000%X", opcode);
+            else if (opcode < 0x100)
+                sprintf(opcode_info, "OP: 00%X", opcode);
+            else if (opcode < 0x1000)
+                sprintf(opcode_info, "OP: 0%X", opcode);
+            else
+                sprintf(opcode_info, "OP: %X", opcode);
+
+            uint16_t stack_top_addr = stack.arr[stack.top];
+            if (stack_top_addr < 0x10)
+                sprintf(stack_top_info, "ST: 000%X", stack_top_addr);
+            else if (stack_top_addr < 0x100)
+                sprintf(stack_top_info, "ST: 00%X", stack_top_addr);
+            else if (stack_top_addr < 0x1000)
+                sprintf(stack_top_info, "ST: 0%X", stack_top_addr);
+            else
+                sprintf(stack_top_info, "ST: %X", stack_top_addr);
+            if (isStackEmpty())
+                sprintf(stack_top_info, "ST: 0000");
+            else if (isStackFull())
+                sprintf(stack_top_info, "ST: XXXX");
+
+
             DrawText(i_info, md_x, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
-            DrawText(pc_info, md_x + md_cell_size * 4, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
-            DrawText(opcode_info, md_x + md_cell_size * 8, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
+            DrawText(pc_info, md_x + md_cell_size * 5, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
+            DrawText(opcode_info, md_x + md_cell_size * 11, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
+            DrawText(stack_top_info, md_x + md_cell_size * 18, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
 
             uint16_t button_size_with_margin = md_ud_w / 5;
             if (button_size_with_margin > 64)
