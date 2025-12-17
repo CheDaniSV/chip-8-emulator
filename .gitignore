@@ -1,6 +1,6 @@
 *.exe
 .vscode
-*.rc*
+*.rc.data
 *.txt
 *.ch8
 ROMs/

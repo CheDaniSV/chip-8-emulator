@@ -1,12 +1,13 @@
-APPNAME ?= raylib
+RCFILE ?= raylib
 COMPILED_FORMAT ?= .rc.data # raylib uses .rc.data for compiled rc data
 
 .PHONY: clean all
 
-all: $(APPNAME).rc.data
+all: $(RCFILE).rc.data
 
-$(APPNAME).rc.data:
-	windres $(APPNAME).rc -O coff -o $(APPNAME)$(COMPILED_FORMAT) # `-O coff` for Common Objcet File format (gcc), for MCVC use `-O res`
+# `-O coff` for Common Object File format (gcc), for MCVC use `-O res`
+$(RCFILE).rc.data:
+	windres $(RCFILE).rc -O coff -o $(RCFILE)$(COMPILED_FORMAT)
 
 clean:
-	rm $(APPNAME)$(COMPILED_FORMAT)
+	rm $(RCFILE)$(COMPILED_FORMAT)

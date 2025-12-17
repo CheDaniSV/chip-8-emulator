@@ -14,7 +14,8 @@
 #define PROGRAM_START       0x200
 #define KEYS_NUM            16
 
-uint16_t cpu_speed = 700; // Instructions per second
+// Emulator related
+uint16_t cpu_speed; // Instructions per second
 uint8_t memory[4096];
 uint8_t V[16]; // General-purpose varibale registers (0-F)
 uint16_t I; // Index register (points to memory locations)
@@ -23,6 +24,8 @@ uint8_t delay_timer; // Delay timer
 uint8_t sound_timer; // Sound timer
 uint8_t currently_loaded_font_type; // 0 - lowres, 1 - hires
 bool is_rom_loaded;
+bool step_by_step_mode;
+bool step_one_instruction;
 
 // Screen, display, UI related
 uint8_t memory_heatmap[4096];
@@ -32,12 +35,11 @@ uint8_t *screen;
 uint16_t d_x; // Display x pos
 uint16_t d_y; // Display y pos
 int16_t memory_heatmap_start = 0;
-bool fullscreen_mode = false;
-bool show_instruction = false;
-char quirks_button_text[3] = "CH";
-int16_t d_margin = 0;
+bool fullscreen_mode;
+char quirks_button_text[3];
+int16_t d_margin;
 const uint8_t styles_count = 12;
-uint8_t current_style = 3;
+uint8_t current_style;
 Color style_colors[12] = {
     YELLOW,
     GOLD,
@@ -52,7 +54,21 @@ Color style_colors[12] = {
     WHITE,
     BLACK
 };
-bool dark_mode = true;
+bool dark_mode;
+bool show_debug_info;
+bool show_message_box;
+bool show_instruction;
+char *message_box_title;
+char *message_box_message;
+char *message_box_buttons;
+int message_box_text_alignment;
+uint16_t message_box_width = 0;
+uint16_t message_box_height = 0;
+int16_t message_box_x = 0;
+int16_t message_box_y = 0;
+Vector2 box_mouse_dragging_delta_pos = {0};
+float md_mouse_dragging_delta_pos_y = 0;
+uint16_t memory_heatmap_start_when_dragging = {0};
 
 // Keypad input related
 bool waiting_for_key;
@@ -84,7 +100,35 @@ bool superchip_reg_mem_load;
 bool superchip_no_reset_vf_on_bit_ops;
 bool superchip_instructions_set; // Additional instructions for superchip
 
-// 4x5px  font
+const char *instruction_text = 
+"Keyboard layout:\n\
+CHIP:\n\
+1 2 3 C\n\
+4 5 6 D\n\
+7 8 9 E\n\
+A 0 B F\n\
+\n\
+Emulator (modern keyboard):\n\
+1 2 3 4\n\
+Q W E R\n\
+A S D F\n\
+Z X C V\n\
+\n\
+Hotkeys:\n\
+- F3 - display FPS & Time;\n\
+- L - reset emulator state (unload program);\n\
+- K - restart program;\n\
+- J - toggle fullscreen mode;\n\
+- H - toggle cpu speed;\n\
+- M - enter step-by-step mode / pause;\n\
+- N - step forward in step-by-step mode;\n\
+- LSHIFT - switch dark mode;\n\
+- TAB - switch style.\n\
+\n\
+To open the ROM drag & drop file into the window.\n\
+Some buttons can be controlled with the mousewheel.";
+
+// 4x5 font
 uint8_t lowres_font_sprites[80] = {
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
     0x20, 0x60, 0x20, 0x20, 0x70, // 1
@@ -104,7 +148,7 @@ uint8_t lowres_font_sprites[80] = {
     0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 };
 
-// 8x10 px font
+// 8x10 font
 uint8_t hires_font_sprites[512] = {
     0x00, 0x00, 0x3C, 0x00, 0x7E, 0x00, 0xE7, 0x00, 0xC3, 0x00, 0xC3, 0x00, 0xC3, 0x00, 0xC3, 0x00, 0xE7, 0x00, 0x7E, 0x00, 0x3C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 0
     0x00, 0x00, 0x18, 0x00, 0x38, 0x00, 0x78, 0x00, 0x58, 0x00, 0x18, 0x00, 0x18, 0x00, 0x18, 0x00, 0x18, 0x00, 0x7E, 0x00, 0x7E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 1
@@ -123,9 +167,6 @@ uint8_t hires_font_sprites[512] = {
     0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xC0, 0x00, 0xC0, 0x00, 0xFE, 0x00, 0xFE, 0x00, 0xC0, 0x00, 0xC0, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // E
     0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xC0, 0x00, 0xC0, 0x00, 0xFE, 0x00, 0xFE, 0x00, 0xC0, 0x00, 0xC0, 0x00, 0xC0, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // F
 };
-
-
-
 
 // Stack Implementation
 typedef struct
@@ -158,41 +199,19 @@ uint16_t popFromStack(void) {
     return stack.arr[(stack.top)--];
 }
 
-// CLI render
-// #define SCREEN_BUFFER_SIZE screen_w * screen_h * 11 * 2 + screen_h + 3
-// char screen_buffer[SCREEN_BUFFER_SIZE];
-// const char pixel_on_esc_color_code[5] = "\x1b[44m";
-// const char pixel_off_esc_color_code[5] = "\x1b[40m";
-// void renderToCLI(void) {
-//     memset(screen_buffer, 0, SCREEN_BUFFER_SIZE);
-//     char *p = screen_buffer;
-//     memcpy(p, "\x1b[H", 3);
-//     p += 3;
-//     for (int y = 0; y < screen_h; ++y) {
-//         for (int x = 0; x < screen_w; ++x) {
-//             memcpy(p, screen[screen_w*y+x] ? pixel_on_esc_color_code : pixel_off_esc_color_code, 5);
-//             p += 5;
-//             memcpy(p, "  ", 2);
-//             p += 2;
-//             memcpy(p, "\x1b[0m", 4);
-//             p += 4;
-//         }
-//         *p++ = '\n';
-//     }
-//     fwrite(screen_buffer, 1, p - screen_buffer, stdout);
-// }
+void showMessageBox(const char *title, const char *message, const char *buttons, int textAlignment);
 
 void loadROM(const char* path) {
     FILE *rom = fopen(path, "rb");
     if (rom == NULL) {
-        perror("Error opening the file"); // TODO: make them raylib message-box
+        showMessageBox("ERROR", "Cound't open the file.", "Close", TEXT_ALIGN_CENTER);
         return;
     }
     fseek(rom, 0, SEEK_END);
     size_t rom_size = ftell(rom);
     fseek(rom, 0, SEEK_SET);
     if (rom_size > sizeof(memory) - PROGRAM_START) {
-        fprintf(stderr, "ROM is too big...\n"); // TODO: make them raylib message-box
+        showMessageBox("ERROR", "ROM is too big.", "Close", TEXT_ALIGN_CENTER);
         return;
     }
     fread(memory + PROGRAM_START, 1, rom_size, rom);
@@ -563,7 +582,7 @@ void loadRegistersFromMemory(uint8_t reg_index) {
 void saveRegStateToLocalStorage(uint8_t reg_index) {
     FILE *flag_registers = fopen("chipdata", "wb");
     if (flag_registers == NULL) {
-        perror("Error opening the file"); // TODO: make that a raylib message-box
+        showMessageBox("ERROR", "Error opening/creating the chipdata file\nduring\nsaveRegStateToLocalStorage operation.", "Close", TEXT_ALIGN_CENTER);
         return;
     }
     fwrite(V, sizeof(uint8_t), reg_index + 1, flag_registers);
@@ -581,7 +600,7 @@ void loadRegStateFromLocalStorage(uint8_t reg_index) {
     size_t bytes_in_file = ftell(flag_registers);
     fseek(flag_registers, 0, SEEK_SET);
     if (bytes_in_file > 16) {
-        printf("chipdata file is too big, possibly corrupted\n");
+        showMessageBox("INFO", "chipdata file this program is trying to use\nis too big,\npossibly corrupted.", "Close", TEXT_ALIGN_CENTER);
     }
     fread(V, sizeof(uint8_t), reg_index + 1, flag_registers);
     fclose(flag_registers);
@@ -634,14 +653,16 @@ Sound generateBeep(int frequency) {
 // 0 - CHIP-8
 // 1 - SUPER-CHIP
 void setQuirks(uint8_t type) {
+    if (type != 0) type = 1;
     superchip_shift = type;
     superchip_offset_jump = type;
     superchip_reg_mem_load = type;
     superchip_no_reset_vf_on_bit_ops = type;
 }
 
+// Set screen resolution
 // Type:
-// 0 - 64x32
+// 0 or any number - 64x32
 // 1 - 64x64
 // 2 - 128x64
 void setScreenMode(uint8_t type) {
@@ -654,7 +675,7 @@ void setScreenMode(uint8_t type) {
             screen_w = 128;
             screen_h = 64;
             break;
-        default: // default is CHIP-8
+        default: // default - CHIP-8
             screen_w = 64;
             screen_h = 32;
             break;
@@ -665,32 +686,71 @@ void setScreenMode(uint8_t type) {
     clearScreen();
 }
 
+// Activates SUPER-CHIP instructions
 // Type:
 // 0 - CHIP-8
-// 1 - SUPER-CHIP
+// 1 or any other - SUPER-CHIP
 void setInstructions(uint8_t type) {
-    switch (type) {
-        case 1:
+    if (type)
         superchip_instructions_set = true;
-        break;
-    default:
+    else
         superchip_instructions_set = false;
-        break;
-    }
 }
 
-// Loads fonts into the memory at 0x000 - 0x09F/0x1FF
+// Loads fonts into the memory at 0x000 - 0x09F/0x1FF (depending on size)
 // Type:
 // 0 - lowres (80 bytes)
 // 1 - hires (512 bytes)
+// any other number - set font mem space to 0
 void setFontType(uint8_t type) {
     memset(memory + FONT_MEM_LOC, 0, PROGRAM_START - 1);
-    if (type) {
-        currently_loaded_font_type = 1;
-        memcpy(memory + FONT_MEM_LOC, hires_font_sprites, sizeof(hires_font_sprites));
-    } else {
+    if (type == 0) {
         currently_loaded_font_type = 0;
         memcpy(memory + FONT_MEM_LOC, lowres_font_sprites, sizeof(lowres_font_sprites));
+    } else if (type == 1) {
+        currently_loaded_font_type = 1;
+        memcpy(memory + FONT_MEM_LOC, hires_font_sprites, sizeof(hires_font_sprites));
+    }
+}
+
+// Reset emulator or program to initial state
+// Type:
+// 0 - reset program
+// 1 - unload program
+// 2 or any number - reset emulator
+void resetState(uint8_t type) {
+    I = PROGRAM_START;
+    PC = PROGRAM_START;
+    delay_timer = 0;
+    sound_timer = 0;
+    stack.top = -1;
+    memset(stack.arr, 0, MAX_STACK_SIZE);
+    memset(memory_heatmap, 0, 4096);
+    memset(V, 0, 16);
+    memset(keypad, 0, KEYS_NUM);
+    setInstructions(1);
+    setFontType(0);
+    if (screen != 0) {
+        clearScreen();
+    }
+    if (type >= 1 || type < 0) {
+        is_rom_loaded = false;
+        memset(memory, 0, 4096);
+        setScreenMode(0);
+    }
+    if (type >= 2 || type < 0) {
+        show_instruction = false;
+        fullscreen_mode = false;
+        dark_mode = true;
+        current_style = 5;
+        d_margin = 0;
+        setQuirks(0);
+        cpu_speed = 700;
+        step_by_step_mode = false;
+        step_one_instruction = false;
+        show_message_box = false;
+        show_debug_info = false;
+        strcpy(quirks_button_text, "CH");
     }
 }
 
@@ -705,8 +765,6 @@ void step_one_cycle(void) {
     uint8_t nibble4 = b2 & 0xF;
     uint16_t opcode = (b1 << 8) | b2;
     uint16_t addr = (nibble2 << 8) | b2; // NNN
-    // printf("%X: %X %X %X | %X %X %X %X %X\n", (PC - 2) & 0xFFF, b1, b2, opcode, nibble1, nibble2, nibble3, nibble4);
-    // printf("%X: %X \n", PC-2, opcode);
 
     memory_heatmap[PC - 2] = 0xFF;
     memory_heatmap[PC - 1] = 0xFF;
@@ -910,46 +968,112 @@ void step_one_cycle(void) {
     }
 }
 
-// Reset emulator to initial state
-void resetState() {
-    I = PROGRAM_START;
-    PC = PROGRAM_START;
-    delay_timer = 0;
-    sound_timer = 0;
-    stack.top = -1;
-    is_rom_loaded = false;
-    memset(stack.arr, 0, MAX_STACK_SIZE);
-    memset(memory, 0, 4096);
-    memset(memory_heatmap, 0, 4096);
-    memset(V, 0, 16);
-    memset(keypad, 0, KEYS_NUM);
-    setScreenMode(0);
-    setFontType(0);
+void showMessageBox(const char *title, const char *message, const char *buttons, int textAlignment) {
+    message_box_text_alignment = textAlignment;
+    show_message_box = true;
+
+    message_box_width = 300;
+    message_box_height = 200;
+    uint16_t line_count = 0;
+    for (uint16_t i = 0; i < strlen(message); ++i)
+        if (message[i] == '\n')
+            ++line_count;
+
+    if (message_box_width - 2 * RAYGUI_MESSAGEBOX_BUTTON_PADDING <= GetTextWidth(message))
+        message_box_width = GetTextWidth(message) + 2 * RAYGUI_MESSAGEBOX_BUTTON_PADDING;
+
+    float fontSize = (float)GuiGetStyle(DEFAULT, TEXT_SIZE);
+    if ((message_box_height - RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT - 3 * RAYGUI_MESSAGEBOX_BUTTON_PADDING - RAYGUI_MESSAGEBOX_BUTTON_HEIGHT) < (fontSize * line_count))
+        message_box_height = line_count * fontSize + line_count * GuiGetStyle(DEFAULT, TEXT_SIZE) / 2 + RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT + 3 * RAYGUI_MESSAGEBOX_BUTTON_PADDING + RAYGUI_MESSAGEBOX_BUTTON_HEIGHT;
+
+    message_box_x = GetScreenWidth() / 2 - message_box_width / 2;
+    message_box_y = GetScreenHeight() / 2 - message_box_height / 2;
+
+    unsigned long long char_size = sizeof(char);
+    message_box_title = realloc(message_box_title, (strlen(title) + 1) * char_size);
+    message_box_message = realloc(message_box_message, (strlen(message) + 1) * char_size);
+    message_box_buttons = realloc(message_box_buttons, (strlen(buttons) + 1) * char_size);
+    strcpy(message_box_title, title);
+    strcpy(message_box_message, message);
+    strcpy(message_box_buttons, buttons);
+}
+
+// Almost the same as GuiMessageBox(), but adds textAlignment, and supports only one button
+int customMessageBox(Rectangle bounds, const char *title, const char *message, const char *button, int textAlignment) {
+    int result = -1;
+
+    Rectangle buttonBound = { 0 };
+    buttonBound.x = bounds.x + RAYGUI_MESSAGEBOX_BUTTON_PADDING;
+    buttonBound.y = bounds.y + bounds.height - RAYGUI_MESSAGEBOX_BUTTON_HEIGHT - RAYGUI_MESSAGEBOX_BUTTON_PADDING;
+    buttonBound.width = bounds.width - 2 * RAYGUI_MESSAGEBOX_BUTTON_PADDING;
+    buttonBound.height = RAYGUI_MESSAGEBOX_BUTTON_HEIGHT;
+
+    int textWidth = GetTextWidth(message) + 2;
+
+    Rectangle textBounds = { 0 };
+    textBounds.x = bounds.x + GuiGetStyle(DEFAULT, TEXT_SIZE);
+    textBounds.y = bounds.y + RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT + RAYGUI_MESSAGEBOX_BUTTON_PADDING;
+    textBounds.width = bounds.width - 2 * GuiGetStyle(DEFAULT, TEXT_SIZE);
+    textBounds.height = bounds.height - RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT - 3 * RAYGUI_MESSAGEBOX_BUTTON_PADDING - RAYGUI_MESSAGEBOX_BUTTON_HEIGHT;
+    if (GuiWindowBox(bounds, title)) result = 0;
+
+    int prevTextAlignment = GuiGetStyle(LABEL, TEXT_ALIGNMENT);
+    GuiSetStyle(LABEL, TEXT_ALIGNMENT, textAlignment);
+    GuiLabel(textBounds, message);
+    GuiSetStyle(LABEL, TEXT_ALIGNMENT, prevTextAlignment);
+
+    prevTextAlignment = GuiGetStyle(BUTTON, TEXT_ALIGNMENT);
+    GuiSetStyle(BUTTON, TEXT_ALIGNMENT, TEXT_ALIGN_CENTER);
+
+    if (GuiButton(buttonBound, button))
+        result = 1;
+
+    GuiSetStyle(BUTTON, TEXT_ALIGNMENT, prevTextAlignment);
+
+    return result;
 }
 
 void raylibProcess() {
 
-    // Raylib events
+    // Raylib events (not all events are here, some are inline in UI code)
     if (IsFileDropped()) {
         FilePathList droppedFiles = LoadDroppedFiles();
-        resetState();
+        resetState(1);
         loadROM(droppedFiles.paths[0]);
         UnloadDroppedFiles(droppedFiles);
     }
 
-    if (IsKeyPressed(KEY_L))
-        resetState();
-    if (IsKeyPressed(KEY_K)) {
-        clearScreen();
-        jump(PROGRAM_START);
-    }
+    if (IsKeyPressed(KEY_F3)) show_debug_info = !show_debug_info;
+    if (IsKeyPressed(KEY_L)) resetState(1);
+    if (IsKeyPressed(KEY_K)) resetState(0);
     if (IsKeyPressed(KEY_J)) fullscreen_mode = !fullscreen_mode;
+    if (IsKeyPressed(KEY_M)) step_by_step_mode = !step_by_step_mode;
+    if (IsKeyDown(KEY_N)) step_one_instruction = true;
+    if (IsKeyPressed(KEY_TAB)) {
+        // Yes, it's a of code from button, but I don't want to make a function for that
+        if (current_style + 1 < styles_count)
+                    ++current_style;
+                else
+                    current_style = 0;
+                if (current_style == 11)
+                    dark_mode = false;
+                else if (current_style == 10)
+                    dark_mode = true;
+                else if (current_style == 0)
+                    dark_mode = false;
+    }
+    if (IsKeyPressed(KEY_LEFT_SHIFT))
+        if (current_style != 10 && current_style != 11)
+            dark_mode = !dark_mode;
 
+    // Drawing
     BeginDrawing();
+        int16_t global_margin = 16;
         int16_t border_width = 2;
         int16_t border_margin = 1;
         uint16_t d_px_size = 0;
 
+        // Styles
         Color main_foreground = style_colors[current_style];
         Color main_background;
         if (dark_mode)
@@ -965,21 +1089,32 @@ void raylibProcess() {
             main_text_color = BLACK;
 
         // Generate style base on theme color
-        GuiSetStyle(BUTTON, BORDER_COLOR_NORMAL, ColorToInt(main_foreground));
-        GuiSetStyle(BUTTON, BASE_COLOR_NORMAL, ColorToInt(secondary_color));
-        GuiSetStyle(BUTTON, TEXT_COLOR_NORMAL, ColorToInt(main_text_color));
-        // GuiSetStyle(BUTTON, TEXT_PADDING, 0);
-        // GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
-        
-        GuiSetStyle(BUTTON, BORDER_COLOR_FOCUSED, ColorToInt(ColorBrightness(main_foreground, -0.3)));
-        GuiSetStyle(BUTTON, BASE_COLOR_FOCUSED, ColorToInt(ColorBrightness(secondary_color, -0.5)));
-        GuiSetStyle(BUTTON, TEXT_COLOR_FOCUSED, ColorToInt(ColorBrightness(main_text_color, -0.3)));
-        
         GuiSetStyle(BUTTON, BORDER_COLOR_PRESSED, ColorToInt(ColorBrightness(main_foreground, 0.3)));
+        GuiSetStyle(BUTTON, BORDER_COLOR_FOCUSED, ColorToInt(ColorBrightness(main_foreground, -0.3)));
+        GuiSetStyle(BUTTON, BORDER_COLOR_NORMAL, ColorToInt(main_foreground));
+        
         GuiSetStyle(BUTTON, BASE_COLOR_PRESSED, ColorToInt(ColorBrightness(secondary_color, 0.5)));
-        GuiSetStyle(BUTTON, TEXT_COLOR_PRESSED, ColorToInt(ColorBrightness(main_text_color, 0.3)));
+        GuiSetStyle(BUTTON, BASE_COLOR_FOCUSED, ColorToInt(ColorBrightness(secondary_color, -0.5)));
+        GuiSetStyle(BUTTON, BASE_COLOR_NORMAL, ColorToInt(secondary_color));
+        
+        if (dark_mode)
+            GuiSetStyle(BUTTON, TEXT_COLOR_PRESSED, ColorToInt(ColorBrightness(main_text_color, 0.3)));
+        else 
+            GuiSetStyle(BUTTON, TEXT_COLOR_PRESSED, ColorToInt(ColorBrightness(main_text_color, -0.3)));
+        GuiSetStyle(BUTTON, TEXT_COLOR_FOCUSED, ColorToInt(ColorBrightness(main_text_color, -0.3)));
+        GuiSetStyle(BUTTON, TEXT_COLOR_NORMAL, ColorToInt(main_text_color));
 
-    
+        // Style for messagebox, instruction window // TODO: It that correct?
+        GuiSetStyle(STATUSBAR, BORDER_COLOR_NORMAL, ColorToInt(main_foreground));
+        GuiSetStyle(STATUSBAR, BASE_COLOR_NORMAL, ColorToInt(main_background));
+        GuiSetStyle(STATUSBAR, TEXT_COLOR_NORMAL, ColorToInt(main_text_color));
+        GuiSetStyle(DEFAULT, BACKGROUND_COLOR, ColorToInt(main_background));
+        GuiSetStyle(DEFAULT, LINE_COLOR, ColorToInt(main_foreground));
+        GuiSetStyle(LABEL, BORDER_COLOR_NORMAL, ColorToInt(main_foreground));
+        GuiSetStyle(LABEL, BASE_COLOR_NORMAL, ColorToInt(secondary_color));
+        GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, ColorToInt(main_text_color));
+
+        // Emulator display
         if (fullscreen_mode) {
             uint16_t scaleX = (GetScreenWidth() - 2 * border_margin - 2 * border_width) / screen_w;
             uint16_t scaleY = (GetScreenHeight() - 2 * border_margin - 2 * border_width) / screen_h;
@@ -989,10 +1124,10 @@ void raylibProcess() {
         } else {
             d_px_size = GetScreenWidth() * 0.7 / screen_w;
             if ((d_px_size * screen_h + 2 * border_margin + 2 * border_width) > GetScreenHeight()) {
-                d_px_size = GetScreenHeight() / screen_h;
+                d_px_size = (GetScreenHeight() - 2 * border_width - 2 * border_margin) / screen_h;
             }
-            d_x = GetScreenWidth() - d_px_size * screen_w - 2 * border_margin - 2 * border_width - 8;
-            d_y = 16 + border_margin + border_width;
+            d_x = GetScreenWidth() - d_px_size * screen_w - border_margin - border_width - global_margin;
+            d_y = global_margin + border_margin + border_width;
         }
 
         DrawRectangle(d_x - border_margin, d_y - border_margin, screen_w * d_px_size + 2 * border_margin - d_margin, screen_h * d_px_size + 2 * border_margin - d_margin, secondary_color);
@@ -1009,14 +1144,14 @@ void raylibProcess() {
 
         int16_t md_row_length = 32;
         int16_t md_row_num = 32;
-        int16_t md_x = 16 + border_margin;
+        int16_t md_x = global_margin + border_margin + border_width;
         int16_t md_margin = 1;
         int16_t md_cell_size = (d_x - 32) / md_row_length;
         if ((md_cell_size * md_row_length + 2 * border_margin + 2 * border_width) > GetScreenWidth() * 0.3)
             md_cell_size = GetScreenWidth() * 0.3 / md_row_length;
         // int16_t md_y = GetScreenHeight() - md_row_num * md_cell_size - 2 * border_margin - 2 * border_width - 8;
         // int16_t md_y = d_y + d_px_size * screen_h - md_row_num * md_cell_size;
-        int16_t md_y = 16 + border_margin + border_width;
+        int16_t md_y = global_margin + border_margin + border_width;
         int16_t md_lud_x = md_x - border_width - border_margin; // left, up, down border Xpos
         int16_t md_r_x = md_x + md_row_length * md_cell_size + border_margin - md_margin; // right border Xpos
         int16_t md_d_y = md_y + md_row_num * md_cell_size + border_margin - md_margin; // bottom border Ypos
@@ -1024,7 +1159,7 @@ void raylibProcess() {
         int16_t md_lr_y = md_y - border_margin; // left, right border Ypos
         int16_t md_ud_w = md_row_length * md_cell_size + 2 * border_width + 2 * border_margin - md_margin; // up, down border width
         int16_t md_lr_h = md_row_num * md_cell_size + 2 * border_margin - md_margin; // left, right border hight
-        
+
         // Memory heatmap display
         if (!fullscreen_mode) {
             DrawRectangle(md_x - border_margin, md_y - border_margin, md_cell_size * md_row_length + 2 * border_margin - md_margin, md_cell_size * md_row_num + 2 * border_margin - md_margin, secondary_color);
@@ -1036,6 +1171,22 @@ void raylibProcess() {
             if (GetMouseX() > md_lud_x && GetMouseX() < md_r_x && GetMouseY() < md_d_y && GetMouseY() > md_u_y) {
                 memory_heatmap_start -= (int16_t)GetMouseWheelMove() * md_row_length;
             }
+
+            if (GetMouseX() > md_lud_x && GetMouseX() < md_r_x && GetMouseY() < md_d_y && GetMouseY() > md_u_y 
+                && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && box_mouse_dragging_delta_pos.x == 0 && box_mouse_dragging_delta_pos.y == 0
+                && (((GetMouseX() < message_box_x || GetMouseX() > message_box_x + message_box_width) && (GetMouseY() < message_box_y || GetMouseY() > message_box_y + message_box_height)) || !show_message_box
+                    || ((GetMouseX() < message_box_x || GetMouseX() > message_box_x + message_box_width) && GetMouseY() > message_box_y && GetMouseY() < message_box_y + message_box_height)
+                    || ((GetMouseY() < message_box_y || GetMouseY() > message_box_y + message_box_height) && GetMouseX() > message_box_x && GetMouseX() < message_box_x + message_box_width))) {
+                if (md_mouse_dragging_delta_pos_y == 0 && memory_heatmap_start_when_dragging == 0) {
+                    md_mouse_dragging_delta_pos_y = GetMouseY();
+                    memory_heatmap_start_when_dragging = memory_heatmap_start;
+                }
+                memory_heatmap_start = memory_heatmap_start_when_dragging - (GetMouseY() - md_mouse_dragging_delta_pos_y) * md_row_length;
+            } else {
+                    md_mouse_dragging_delta_pos_y = 0;
+                    memory_heatmap_start_when_dragging = 0;
+            }
+
             if (memory_heatmap_start < 0) {
                 memory_heatmap_start = 0;
             } else if (memory_heatmap_start >= 4096 - md_row_num * md_row_length) {
@@ -1051,14 +1202,15 @@ void raylibProcess() {
                 } else if ((currently_loaded_font_type == 0 && i < 0x50) || (currently_loaded_font_type == 1 && i < PROGRAM_START)) {
                     cell_color = BLUE;
                 } else if (memory[i] == 0x00) {
-                    cell_color = DARKGRAY;
+                    cell_color = GRAY;
                 } else {
                     cell_color = GREEN;
                 }
                 double brightness = (memory_heatmap[i] / 255.0) - 0.3;
-                if (brightness < 0) brightness = 0;
-                DrawRectangle(md_x + (i - memory_heatmap_start) % md_row_length * md_cell_size,
-                            md_y + (i - memory_heatmap_start) / md_row_length * md_cell_size,
+                if (brightness < 0)
+                    brightness = 0;
+                DrawRectangle(md_x + (i - (int) memory_heatmap_start) % md_row_length * md_cell_size,
+                            md_y + (i - (int) memory_heatmap_start) / md_row_length * md_cell_size,
                             md_cell_size - md_margin, md_cell_size - md_margin, memory_heatmap[i] == 0 ? cell_color : ColorBrightness(cell_color, brightness));
             }
         }
@@ -1078,21 +1230,43 @@ void raylibProcess() {
                     sprintf(reg_info, "%X: %X", i, V[i]);
                 }
                 if (i < 8)
-                    DrawText(reg_info, md_x + i * md_cell_size * 4, md_y + md_lr_h + 12, md_cell_size, main_text_color);
+                    DrawText(reg_info, md_x + i * md_cell_size * 4, md_y + md_lr_h + 8, md_cell_size, main_text_color);
                 else 
-                    DrawText(reg_info, md_x + i % 8 * md_cell_size * 4, md_y + md_lr_h + 16 + md_cell_size, md_cell_size, main_text_color);
+                    DrawText(reg_info, md_x + i % 8 * md_cell_size * 4, md_y + md_lr_h + 2 * 8 + md_cell_size, md_cell_size, main_text_color);
             }
+            char pc_info[16];
+            char i_info[16];
+            char opcode_info[16];
+            if (I < 0x10)
+                sprintf(i_info, "i: 00%X", I);
+            else if (I < 0x100)
+                sprintf(i_info, "i: 0%X", I);
+            else
+                sprintf(i_info, "i: %X", I);
+            if (PC < 0x10)
+                sprintf(pc_info, "i: 00%X", PC);
+            else if (PC < 0x100)
+                sprintf(pc_info, "i: 0%X", PC);
+            else
+                sprintf(pc_info, "i: %X", PC);
+            sprintf(opcode_info, "OP: %X", ((memory[PC] << 8) | memory[PC + 1]));
+            DrawText(i_info, md_x, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
+            DrawText(pc_info, md_x + md_cell_size * 4, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
+            DrawText(opcode_info, md_x + md_cell_size * 8, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
 
             uint16_t button_size_with_margin = md_ud_w / 5;
             if (button_size_with_margin > 64)
                 button_size_with_margin = 64;
-            uint16_t button_y_dest = md_y + md_lr_h + 16 + md_cell_size + 20;
+            uint16_t button_y_dest = md_y + md_lr_h + 4 * 8 + 3 * md_cell_size;
             uint16_t button_x_dest = md_x - border_margin - border_width;
             uint16_t button_margin = 4;
             uint16_t button_size = button_size_with_margin - button_margin;
 
-            if (GuiButton((Rectangle){ button_x_dest, button_y_dest, button_size, button_size}, "help")) show_instruction = !show_instruction; // 193 - ?
-            if (GuiButton((Rectangle){ button_x_dest + button_size_with_margin, button_y_dest, button_size, button_size}, "#107#")) fullscreen_mode = true;
+            if (GuiButton((Rectangle){ button_x_dest, button_y_dest, button_size, button_size}, "help")) {
+                showMessageBox("Instruction", instruction_text, "Close", TEXT_ALIGN_LEFT);
+            }
+            if (GuiButton((Rectangle){ button_x_dest + button_size_with_margin, button_y_dest, button_size, button_size}, "#107#"))
+                fullscreen_mode = true;
             if (GuiButton((Rectangle){ button_x_dest + 2 * button_size_with_margin, button_y_dest, button_size, button_size}, dark_mode ? "#157#" : "#156#")) {
                 if (current_style != 10 && current_style != 11)
                     dark_mode = !dark_mode;
@@ -1123,23 +1297,21 @@ void raylibProcess() {
             if (GuiButton((Rectangle){ button_x_dest, button_y_dest + button_size + button_margin, button_size, button_size}, quirks_button_text)) {
                 if (quirks_button_text[0] == 'S') {
                     setQuirks(0);
-                    quirks_button_text[0] = 'C';
-                    quirks_button_text[1] = 'H';
+                    strcpy(quirks_button_text, "CH");
                 } else {
                     setQuirks(1);
-                    quirks_button_text[0] = 'S';
-                    quirks_button_text[1] = 'C';
+                    strcpy(quirks_button_text, "SC");
                 }
             }
 
             if (GetMouseX() >= button_x_dest + button_size_with_margin && GetMouseX() <= button_x_dest + button_size_with_margin + button_size
                 && GetMouseY() >= button_y_dest + button_size + button_margin && GetMouseY() <= button_y_dest + 2 * button_size + button_margin
                 ) {
-                cpu_speed -= (uint16_t)GetMouseWheelMove();
+                cpu_speed += (uint16_t)GetMouseWheelMove();
             }
+
             char cpu_speed_text[16]; sprintf(cpu_speed_text, "%dhz", cpu_speed);
-            if (GuiButton((Rectangle){ button_x_dest + button_size_with_margin, button_y_dest + button_size + button_margin, button_size, button_size}, cpu_speed_text) ||
-            IsKeyPressed(KEY_H)) {
+            if (GuiButton((Rectangle){ button_x_dest + button_size_with_margin, button_y_dest + button_size + button_margin, button_size, button_size}, cpu_speed_text) || IsKeyPressed(KEY_H)) {
                 if (cpu_speed < 700)
                     cpu_speed = 700;
                 else if (cpu_speed < 1000 && cpu_speed >= 700)
@@ -1151,13 +1323,24 @@ void raylibProcess() {
                 else if (cpu_speed >= 2100)
                     cpu_speed = 0;
             };
+
             if (GuiButton((Rectangle){ button_x_dest + 2 * button_size_with_margin, button_y_dest + button_size + button_margin, button_size, button_size}, "#76#")) {
-                clearScreen();
-                jump(PROGRAM_START);
+                resetState(0);
             };
 
-            GuiButton((Rectangle){ button_x_dest + 3 * button_size_with_margin, button_y_dest + button_size + button_margin, button_size, button_size}, "#132#");
-            GuiButton((Rectangle){ button_x_dest + 4 * button_size_with_margin, button_y_dest + button_size + button_margin, button_size, button_size}, "#131#");
+            if (GuiButton((Rectangle){ button_x_dest + 3 * button_size_with_margin, button_y_dest + button_size + button_margin, button_size, button_size}, step_by_step_mode ? "#131#" : "#132#")) {
+                step_by_step_mode = !step_by_step_mode;
+                step_one_instruction = false;
+            };
+
+            if ((GetMouseX() >= button_x_dest + 4 * button_size_with_margin && GetMouseX() <= button_x_dest + 4 * button_size_with_margin + button_size
+                && GetMouseY() >= button_y_dest + button_size + button_margin && GetMouseY() <= button_y_dest + 2 * button_size + button_margin)) {
+                if (step_by_step_mode) step_one_instruction = (GetMouseWheelMove() != 0);
+            }
+
+            if (GuiButton((Rectangle){ button_x_dest + 4 * button_size_with_margin, button_y_dest + button_size + button_margin, button_size, button_size}, "#119#")) {
+                if (step_by_step_mode) step_one_instruction = true;
+            }
         } else {
             GuiSetStyle(BUTTON, BASE_COLOR_NORMAL, ColorToInt(main_background)); // To keep base_color opaque
             GuiSetStyle(BUTTON, BASE_COLOR_FOCUSED, ColorToInt(main_background));
@@ -1166,92 +1349,43 @@ void raylibProcess() {
                 fullscreen_mode = false;
         }
 
-        if (show_instruction) {
-            DrawRectangle(16, 16, GetScreenWidth() - 32, GetScreenHeight() - 32, Fade(YELLOW, 0.8));
+        if (show_message_box) {
+            if (GetMouseX() >= message_box_x && GetMouseX() <= message_box_x + message_box_width - 20
+            && GetMouseY() >= message_box_y &&  GetMouseY() <= message_box_y + RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT
+            && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+                if (box_mouse_dragging_delta_pos.x == 0 && box_mouse_dragging_delta_pos.y == 0) {
+                    box_mouse_dragging_delta_pos.x = GetMouseX() - message_box_x;
+                    box_mouse_dragging_delta_pos.y = GetMouseY() - message_box_y;
+                }
+                message_box_x = GetMouseX() - box_mouse_dragging_delta_pos.x;
+                message_box_y = GetMouseY() - box_mouse_dragging_delta_pos.y;
+            } else if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+                if (box_mouse_dragging_delta_pos.x != 0 && box_mouse_dragging_delta_pos.y != 0) {
+                    message_box_x = GetMouseX() - box_mouse_dragging_delta_pos.x;
+                    message_box_y = GetMouseY() - box_mouse_dragging_delta_pos.y;
+                }
+            } else {
+                box_mouse_dragging_delta_pos.x = 0;
+                box_mouse_dragging_delta_pos.y = 0;
+            }
+            if (customMessageBox((Rectangle){ message_box_x, message_box_y, message_box_width, message_box_height},
+                message_box_title, message_box_message, message_box_buttons, message_box_text_alignment) >= 0)
+                show_message_box = false;
         }
 
+        if(show_debug_info) {
+            DrawFPS(global_margin, GetScreenHeight() - 32);
+            char info1[32]; sprintf(info1, "Time: %.3f", GetTime());
+            DrawText(info1, 2 * global_margin + 20 * 4, GetScreenHeight() - 32, 20, main_text_color);
+        }
         EndDrawing();
 }
 
-int main(int argc, char *argv[]) {
-    setQuirks(0);
-    setInstructions(1);
-    resetState();
-    if (argc == 2) {
-        loadROM(argv[1]);
-    } else if (argc > 2) {
-        printf("Got %d arguments, expected 1 (path to load a ROM from).", argc - 1);
-        return 1;
-    }
-
-    // Font test
-    // setFontType(1);
-    // setScreenMode(2);
-    // for (int i = 0; i < 16; ++i) {
-    //     setVXNN(0, i);
-    //     if (i < 14) {
-    //         setVXNN(1, 1);
-    //         setVXNN(2, 1 + i * 9);
-    //     }
-    //     else {
-    //         setVXNN(1, 12);
-    //         setVXNN(2, 1 + (i - 14) * 9);
-    //     }
-    //     setIToHighResFontChar(0);
-    //     drawHighRes(2, 1);
-    // }
-
-    // setFontType(0);
-    // setVXNN(1, 1);
-    // setIToLowResFontChar(0xF);
-    // draw(1, 1, 5);
-
-    // loadROM("IBM Logo.ch8");
-    // loadROM("ROMs/chip-8-roms/programs/Chip8 Picture.ch8");
-    // loadROM("ROMs/chip-8-roms/programs/Chip8 emulator Logo [Garstyciuks].ch8");
-    // loadROM("ROMs/chip-8-roms/programs/Random Number Test [Matthew Mikolay, 2010].ch8");
-    // loadROM("ROMs/chip-8-roms/demos/Particle Demo [zeroZshadow, 2008].ch8");
-    // loadROM("ROMs/chip-8-roms/programs/Division Test [Sergey Naydenov, 2010].ch8");
-    // loadROM("ROMs/chip-8-roms/programs/SQRT Test [Sergey Naydenov, 2010].ch8");
-    // loadROM("ROMs/chip-8-roms/programs/Delay Timer Test [Matthew Mikolay, 2010].ch8");
-    // loadROM("ROMs/chip-8-roms/games/ZeroPong [zeroZshadow, 2007].ch8");
-    // loadROM("ROMs/chip-8-roms/demos/Stars [Sergey Naydenov, 2010].ch8");
-    // loadROM("ROMs/chip-8-roms/demos/Maze [David Winter, 199x].ch8");
-    // loadROM("ROMs/chip-8-roms/demos/Maze (alt) [David Winter, 199x].ch8");
-    // loadROM("ROMs/chip-8-roms/demos/Zero Demo [zeroZshadow, 2007].ch8");
-    // loadROM("ROMs/chip-8-roms/demos/Trip8 Demo (2008) [Revival Studios].ch8");
-    // loadROM("ROMs/chip-8-roms/programs/Clock Program [Bill Fisher, 1981].ch8");
-    // loadROM("ROMs/chip-8-roms/demos/Sirpinski [Sergey Naydenov, 2010].ch8");
-    // loadROM("ROMs/chip-8-roms/demos/Sierpinski [Sergey Naydenov, 2010].ch8");
-    // loadROM("ROMs/chip-8-roms/programs/2BMP Viewer - Hello (C8 example) [Hap, 2005].ch8");
-    // loadROM("ROMs/chip-8-roms/programs/Fishie [Hap, 2005].ch8");
-    // loadROM("ROMs/chip-8-roms/programs/Framed MK1 [GV Samways, 1980].ch8");
-    // loadROM("ROMs/chip-8-roms/programs/Framed MK2 [GV Samways, 1980].ch8");
-    // loadROM("ROMs/chip-8-roms/programs/Life [GV Samways, 1980].ch8");
-    // loadROM("ROMs/chip-8-roms/programs/Keypad Test [Hap, 2006].ch8");
-
-    // loadROM("ROMs/chip-8-roms/hires/Hires Maze [David Winter, 199x].ch8");
-    // loadROM("ROMs/chip-8-roms/hires/Hires Particle Demo [zeroZshadow, 2008].ch8");
-    // loadROM("ROMs/chip-8-roms/hires/Astro Dodge Hires [Revival Studios, 2008].ch8");
-    // loadROM("ROMs/chip-8-roms/hires/Trip8 Hires Demo (2008) [Revival Studios].ch8");
-
-    // loadROM("ROMs/chip8-test-rom-master/test_opcode.ch8");
-    // loadROM("ROMs/test-suite/1-chip8-logo.ch8");
-    // loadROM("ROMs/test-suite/2-ibm-logo.ch8");
-    // loadROM("ROMs/test-suite/3-corax+.ch8");
-    // loadROM("ROMs/test-suite/4-flags.ch8");
-    // loadROM("ROMs/test-suite/5-quirks.ch8");
-    // loadROM("ROMs/test-suite/6-keypad.ch8");
-    // loadROM("ROMs/test-suite/7-beep.ch8");
-    // loadROM("ROMs/test-suite/8-scrolling.ch8");
-
-    // loadROM("ROMs/superchip8-roms/Field! [Al Roland, 1993].ch8");
-    // loadROM("ROMs/superchip8-roms/Laser.ch8");
-    // loadROM("ROMs/superchip8-roms/Magic Square [David Winter, 1997].ch8");
-    // loadROM("ROMs/octojam1/1dcell.ch8");
+int main() {
+    resetState(2);
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
-    InitWindow(900, 600, "Chip Emulator");
+    InitWindow(900, 600, "CHIP Emulator");
     SetWindowMinSize(850, 500);
     SetTargetFPS(60);
     InitAudioDevice();
@@ -1295,6 +1429,15 @@ int main(int argc, char *argv[]) {
         }
 
         cpu_accumulator += delta_seconds * cpu_speed;
+
+        if (step_by_step_mode) {
+            cpu_accumulator = 0;
+        }
+        if (step_one_instruction && step_by_step_mode) {
+            step_one_cycle();
+            step_one_instruction = false;
+        }
+
         while (cpu_accumulator >= 1.0) {
             step_one_cycle();
             cpu_accumulator -= 1.0;
@@ -1306,5 +1449,8 @@ int main(int argc, char *argv[]) {
     CloseAudioDevice();
     CloseWindow();
     free(screen);
+    free(message_box_title);
+    free(message_box_message);
+    free(message_box_buttons); 
     return 0;
 }
