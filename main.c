@@ -1,7 +1,6 @@
 #include <raylib.h>
 #define RAYGUI_IMPLEMENTATION
 #include <raygui.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -22,16 +21,17 @@ uint16_t I; // Index register (points to memory locations)
 uint16_t PC; // Program Counter register
 uint8_t delay_timer; // Delay timer
 uint8_t sound_timer; // Sound timer
+uint8_t screen_w;
+uint8_t screen_h;
+uint8_t *screen;
 uint8_t currently_loaded_font_type; // 0 - lowres, 1 - hires
 bool is_rom_loaded;
 bool step_by_step_mode;
 bool step_one_instruction;
+char *rom_file_path;
 
 // Screen, display, UI related
 uint8_t memory_heatmap[4096];
-uint8_t screen_w;
-uint8_t screen_h;
-uint8_t *screen;
 uint16_t d_x; // Display x pos
 uint16_t d_y; // Display y pos
 int16_t memory_heatmap_start = 0;
@@ -116,12 +116,12 @@ Z X C V\n\
 \n\
 Hotkeys:\n\
 - F3 - display FPS & Time;\n\
-- L - reset emulator state (unload program);\n\
-- K - restart program;\n\
+- L - reload the program from the last ROM path;\n\
+- K - restart the program;\n\
 - J - toggle fullscreen mode;\n\
-- H - toggle cpu speed;\n\
-- M - enter step-by-step mode / pause;\n\
-- N - step forward in step-by-step mode;\n\
+- H - cycle through cpu speed;\n\
+- M - enter the step-by-step mode;\n\
+- N - step forward in the step-by-step mode;\n\
 - LSHIFT - switch dark mode;\n\
 - TAB - switch style.\n\
 \n\
@@ -730,11 +730,13 @@ void resetState(uint8_t type) {
     memset(keypad, 0, KEYS_NUM);
     setInstructions(1);
     setFontType(0);
-    if (screen != 0) {
-        clearScreen();
-    }
+    clearScreen();
     if (type >= 1 || type < 0) {
         is_rom_loaded = false;
+        if (rom_file_path == 0) {
+            rom_file_path = realloc(rom_file_path, 17 * sizeof(char));
+            strcpy(rom_file_path, "ROM isn't loaded");
+        }
         memset(memory, 0, 4096);
         setScreenMode(0);
     }
@@ -1039,12 +1041,21 @@ void raylibProcess() {
     if (IsFileDropped()) {
         FilePathList droppedFiles = LoadDroppedFiles();
         resetState(1);
-        loadROM(droppedFiles.paths[0]);
+        rom_file_path = realloc(rom_file_path, (strlen(droppedFiles.paths[0]) + 1) * sizeof(char));
+        strcpy(rom_file_path, droppedFiles.paths[0]);
+        loadROM(rom_file_path);
         UnloadDroppedFiles(droppedFiles);
     }
 
     if (IsKeyPressed(KEY_F3)) show_debug_info = !show_debug_info;
-    if (IsKeyPressed(KEY_L)) resetState(1);
+    if (IsKeyPressed(KEY_L)) {
+        if (is_rom_loaded) {
+            resetState(1);
+            loadROM(rom_file_path);
+        } else {
+            showMessageBox("INFO", "No ROM file has been loaded yet.\nDrag & Drop the file into the window to start.", "Close", TEXT_ALIGN_CENTER);
+        }
+    };
     if (IsKeyPressed(KEY_K)) resetState(0);
     if (IsKeyPressed(KEY_J)) fullscreen_mode = !fullscreen_mode;
     if (IsKeyPressed(KEY_M)) step_by_step_mode = !step_by_step_mode;
@@ -1149,8 +1160,6 @@ void raylibProcess() {
         int16_t md_cell_size = (d_x - 32) / md_row_length;
         if ((md_cell_size * md_row_length + 2 * border_margin + 2 * border_width) > GetScreenWidth() * 0.3)
             md_cell_size = GetScreenWidth() * 0.3 / md_row_length;
-        // int16_t md_y = GetScreenHeight() - md_row_num * md_cell_size - 2 * border_margin - 2 * border_width - 8;
-        // int16_t md_y = d_y + d_px_size * screen_h - md_row_num * md_cell_size;
         int16_t md_y = global_margin + border_margin + border_width;
         int16_t md_lud_x = md_x - border_width - border_margin; // left, up, down border Xpos
         int16_t md_r_x = md_x + md_row_length * md_cell_size + border_margin - md_margin; // right border Xpos
@@ -1404,8 +1413,10 @@ void raylibProcess() {
 
         if(show_debug_info) {
             DrawFPS(global_margin, GetScreenHeight() - 32);
-            char info1[32]; sprintf(info1, "Time: %.3f", GetTime());
-            DrawText(info1, 2 * global_margin + 20 * 4, GetScreenHeight() - 32, 20, main_text_color);
+            char debug_info1[32]; sprintf(debug_info1, "Time: %.2f", GetTime());
+            char debug_info2[256]; sprintf(debug_info2, "ROMpath: %s", rom_file_path);
+            DrawText(debug_info1, 2 * global_margin + 20 * 4, GetScreenHeight() - 32, 20, main_text_color);
+            DrawText(debug_info2, 3 * global_margin + 20 * 9, GetScreenHeight() - 32 + 4, 16, main_text_color);
         }
         EndDrawing();
 }
