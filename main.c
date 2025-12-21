@@ -8,7 +8,7 @@
 #include <string.h>
 
 #define MAX_STACK_SIZE      4096
-#define TIMER_STEP          1.0 / 60.0
+#define TIMER_SPEED         60
 #define FONT_MEM_LOC        0x0
 #define PROGRAM_START       0x200
 #define KEYS_NUM            16
@@ -23,12 +23,13 @@ uint8_t delay_timer; // Delay timer
 uint8_t sound_timer; // Sound timer
 uint8_t screen_w;
 uint8_t screen_h;
-uint8_t *screen;
+uint8_t screen[128 * 64] = {0};
 uint8_t currently_loaded_font_type; // 0 - lowres, 1 - hires
 bool is_rom_loaded;
 bool step_by_step_mode;
 bool step_one_instruction;
 char *rom_file_path;
+const char rom_file_path_default_message[17] = "ROM isn't loaded";
 
 // Screen, display, UI related
 uint8_t memory_heatmap[4096];
@@ -72,8 +73,7 @@ uint16_t memory_heatmap_start_when_dragging = {0};
 
 // Keypad input related
 bool waiting_for_key;
-int key_released_this_frame;
-int keypad[KEYS_NUM];
+int key_released_this_cycle;
 int chip8_keymap[KEYS_NUM] = {
     KEY_X,     // 0
     KEY_ONE,   // 1
@@ -115,14 +115,14 @@ A S D F\n\
 Z X C V\n\
 \n\
 Hotkeys:\n\
-- F3 - display FPS & Time;\n\
+- F3 - display debug info;\n\
 - L - reload the program from the last ROM path;\n\
 - K - restart the program;\n\
 - J - toggle fullscreen mode;\n\
 - H - cycle through cpu speed;\n\
 - M - enter the step-by-step mode;\n\
 - N - step forward in the step-by-step mode;\n\
-- LSHIFT - switch dark mode;\n\
+- CTRL - switch dark mode;\n\
 - TAB - switch style.\n\
 \n\
 To open the ROM drag & drop file into the window.\n\
@@ -172,7 +172,7 @@ uint8_t hires_font_sprites[512] = {
 typedef struct
 {
     uint16_t arr[MAX_STACK_SIZE];
-    short top; // 32767 + 1 max size
+    int16_t top;
 } Stack;
 
 Stack stack; // 16-bit stack of memory addresses
@@ -487,16 +487,14 @@ void draw(uint8_t regx_index, uint8_t regy_index, uint8_t length) {
 
 // EX9E
 void skipIfKeyPressed(uint8_t reg_index) {
-    if(keypad[V[reg_index]]) {
+    if (IsKeyDown(chip8_keymap[V[reg_index]]))
         PC += 2;
-    }
 }
 
 // EXA1
 void skipIfKeyNotPressed(uint8_t reg_index) {
-    if(!keypad[V[reg_index]]) {
+    if (!IsKeyDown(chip8_keymap[V[reg_index]]))
         PC += 2;
-    }
 }
 
 // FX07
@@ -509,10 +507,10 @@ void getKey(uint8_t reg_index) {
     if (!waiting_for_key) {
         waiting_for_key = true;
     }
-    if (key_released_this_frame != -1) {
-        V[reg_index] = key_released_this_frame;
+    if (key_released_this_cycle != -1) {
+        V[reg_index] = key_released_this_cycle;
         waiting_for_key = false;
-        key_released_this_frame = -1;
+        key_released_this_cycle = -1;
     }
     if (waiting_for_key) {
         PC -= 2;
@@ -606,18 +604,13 @@ void loadRegStateFromLocalStorage(uint8_t reg_index) {
     fclose(flag_registers);
 }
 
-void pollRaylibKeypadInput(void) {
-    key_released_this_frame = -1;
+void pollRaylibKeypadReleased(void) {
+    key_released_this_cycle = -1;
 
-    // 1. Detect held keys for EX9E & EXA1
-    for (uint8_t i = 0; i < KEYS_NUM; ++i) {
-        keypad[i] = IsKeyDown(chip8_keymap[i]);
-    }
-
-    // 2. Detect key release for FX0A
+    // Detect key release for FX0A
     for (uint8_t i = 0; i < KEYS_NUM; ++i) {
         if (IsKeyReleased(chip8_keymap[i])) {
-            key_released_this_frame = i;
+            key_released_this_cycle = i;
         }
     }
 
@@ -680,9 +673,6 @@ void setScreenMode(uint8_t type) {
             screen_h = 32;
             break;
     }
-    if (screen == 0) {
-        screen = (uint8_t *)malloc(256 * 256 * sizeof(uint8_t));
-    }
     clearScreen();
 }
 
@@ -727,7 +717,6 @@ void resetState(uint8_t type) {
     memset(stack.arr, 0, MAX_STACK_SIZE);
     memset(memory_heatmap, 0, 4096);
     memset(V, 0, 16);
-    memset(keypad, 0, KEYS_NUM);
     setInstructions(1);
     setFontType(0);
     clearScreen();
@@ -735,7 +724,7 @@ void resetState(uint8_t type) {
         is_rom_loaded = false;
         if (rom_file_path == 0) {
             rom_file_path = realloc(rom_file_path, 17 * sizeof(char));
-            strcpy(rom_file_path, "ROM isn't loaded");
+            strcpy(rom_file_path, rom_file_path_default_message);
         }
         memset(memory, 0, 4096);
         setScreenMode(0);
@@ -757,7 +746,7 @@ void resetState(uint8_t type) {
 }
 
 // Fetch / Decode / Execute Loop
-void step_one_cycle(void) {
+void stepOneСycle(void) {
     // Fetch
     uint8_t b1 = memory[PC++];
     uint8_t nibble1 = b1 >> 4;
@@ -766,7 +755,7 @@ void step_one_cycle(void) {
     uint8_t nibble3 = b2 >> 4;
     uint8_t nibble4 = b2 & 0xF;
     uint16_t opcode = (b1 << 8) | b2;
-    uint16_t addr = (nibble2 << 8) | b2; // NNN
+    uint16_t addr = (nibble2 << 8) | b2;
 
     memory_heatmap[PC - 2] = 0xFF;
     memory_heatmap[PC - 1] = 0xFF;
@@ -1049,7 +1038,7 @@ void raylibProcess() {
 
     if (IsKeyPressed(KEY_F3)) show_debug_info = !show_debug_info;
     if (IsKeyPressed(KEY_L)) {
-        if (is_rom_loaded) {
+        if (strcmp(rom_file_path, rom_file_path_default_message) != 0) {
             resetState(1);
             loadROM(rom_file_path);
         } else {
@@ -1061,7 +1050,7 @@ void raylibProcess() {
     if (IsKeyPressed(KEY_M)) step_by_step_mode = !step_by_step_mode;
     if (IsKeyDown(KEY_N)) step_one_instruction = true;
     if (IsKeyPressed(KEY_TAB)) {
-        // Yes, it's a of code from button, but I don't want to make a function for that
+        // Yes, it's a code from the analogous button, but I don't wanna make a function for that
         if (current_style + 1 < styles_count)
                     ++current_style;
                 else
@@ -1073,7 +1062,7 @@ void raylibProcess() {
                 else if (current_style == 0)
                     dark_mode = false;
     }
-    if (IsKeyPressed(KEY_LEFT_SHIFT))
+    if (IsKeyPressed(KEY_LEFT_CONTROL) || IsKeyPressed(KEY_RIGHT_CONTROL))
         if (current_style != 10 && current_style != 11)
             dark_mode = !dark_mode;
 
@@ -1103,11 +1092,11 @@ void raylibProcess() {
         GuiSetStyle(BUTTON, BORDER_COLOR_PRESSED, ColorToInt(ColorBrightness(main_foreground, 0.3)));
         GuiSetStyle(BUTTON, BORDER_COLOR_FOCUSED, ColorToInt(ColorBrightness(main_foreground, -0.3)));
         GuiSetStyle(BUTTON, BORDER_COLOR_NORMAL, ColorToInt(main_foreground));
-        
+
         GuiSetStyle(BUTTON, BASE_COLOR_PRESSED, ColorToInt(ColorBrightness(secondary_color, 0.5)));
         GuiSetStyle(BUTTON, BASE_COLOR_FOCUSED, ColorToInt(ColorBrightness(secondary_color, -0.5)));
         GuiSetStyle(BUTTON, BASE_COLOR_NORMAL, ColorToInt(secondary_color));
-        
+
         if (dark_mode)
             GuiSetStyle(BUTTON, TEXT_COLOR_PRESSED, ColorToInt(ColorBrightness(main_text_color, 0.3)));
         else 
@@ -1247,6 +1236,8 @@ void raylibProcess() {
             char i_info[16];
             char opcode_info[16];
             char stack_top_info[16];
+            char dtimer_info[16];
+            char stimer_info[16];
 
             if (I < 0x10)
                 sprintf(i_info, "I: 00%X", I);
@@ -1274,23 +1265,36 @@ void raylibProcess() {
 
             uint16_t stack_top_addr = stack.arr[stack.top];
             if (stack_top_addr < 0x10)
-                sprintf(stack_top_info, "ST: 000%X", stack_top_addr);
+                sprintf(stack_top_info, "SP: 000%X", stack_top_addr);
             else if (stack_top_addr < 0x100)
-                sprintf(stack_top_info, "ST: 00%X", stack_top_addr);
+                sprintf(stack_top_info, "SP: 00%X", stack_top_addr);
             else if (stack_top_addr < 0x1000)
-                sprintf(stack_top_info, "ST: 0%X", stack_top_addr);
+                sprintf(stack_top_info, "SP: 0%X", stack_top_addr);
             else
-                sprintf(stack_top_info, "ST: %X", stack_top_addr);
+                sprintf(stack_top_info, "SP: %X", stack_top_addr);
             if (isStackEmpty())
-                sprintf(stack_top_info, "ST: 0000");
+                sprintf(stack_top_info, "SP: 0000");
             else if (isStackFull())
-                sprintf(stack_top_info, "ST: XXXX");
+                sprintf(stack_top_info, "SP: XXXX");
 
+            if (delay_timer < 0x10) {
+                sprintf(dtimer_info, "D: 0%X", delay_timer);
+            } else {
+                sprintf(dtimer_info, "D: %X", delay_timer);
+            }
+
+            if (sound_timer < 0x10) {
+                sprintf(stimer_info, "S: 0%X", sound_timer);
+            } else {
+                sprintf(stimer_info, "S: %X", sound_timer);
+            }
 
             DrawText(i_info, md_x, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
             DrawText(pc_info, md_x + md_cell_size * 5, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
             DrawText(opcode_info, md_x + md_cell_size * 11, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
             DrawText(stack_top_info, md_x + md_cell_size * 18, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
+            DrawText(dtimer_info, md_x + md_cell_size * 24, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
+            DrawText(stimer_info, md_x + md_cell_size * 28, md_y + md_lr_h + 3 * 8 + 2 * md_cell_size, md_cell_size, main_text_color);
 
             uint16_t button_size_with_margin = md_ud_w / 5;
             if (button_size_with_margin > 64)
@@ -1415,8 +1419,10 @@ void raylibProcess() {
             DrawFPS(global_margin, GetScreenHeight() - 32);
             char debug_info1[32]; sprintf(debug_info1, "Time: %.2f", GetTime());
             char debug_info2[256]; sprintf(debug_info2, "ROMpath: %s", rom_file_path);
+            char debug_info3[32]; sprintf(debug_info3, "Screen size: %dx%d", GetScreenWidth(), GetScreenHeight());
             DrawText(debug_info1, 2 * global_margin + 20 * 4, GetScreenHeight() - 32, 20, main_text_color);
-            DrawText(debug_info2, 3 * global_margin + 20 * 9, GetScreenHeight() - 32 + 4, 16, main_text_color);
+            DrawText(debug_info2, global_margin, GetScreenHeight() - 64 + 8, 16, main_text_color);
+            DrawText(debug_info3, 3 * global_margin + 20 * (4 + (strlen(debug_info1) / 2)), GetScreenHeight() - 32, 20, main_text_color);
         }
         EndDrawing();
 }
@@ -1426,7 +1432,7 @@ int main() {
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
     InitWindow(900, 600, "CHIP Emulator");
-    SetWindowMinSize(850, 500);
+    SetWindowMinSize(885, 500);
     SetTargetFPS(60);
     InitAudioDevice();
     Sound beep = generateBeep(440);
@@ -1440,11 +1446,11 @@ int main() {
         double current_cycle_time = GetTime();
         double delta_seconds = (current_cycle_time - last_cycle_time);
         last_cycle_time = current_cycle_time;
-        timer_accumulator += delta_seconds;
+        timer_accumulator += delta_seconds * TIMER_SPEED;
 
-        pollRaylibKeypadInput();
+        pollRaylibKeypadReleased();
 
-        while (timer_accumulator >= TIMER_STEP) {
+        while (timer_accumulator >= 1.0) {
             if (delay_timer > 0) {
                 --delay_timer;
             }
@@ -1458,7 +1464,7 @@ int main() {
                     StopSound(beep);
                 }
             }
-            timer_accumulator -= TIMER_STEP;
+            timer_accumulator -= 1.0;
             for (uint16_t i = 0; i < 4096; ++i) {
                 if (memory_heatmap[i] > 0 && memory_heatmap[i] - 5 >= 0) {
                     memory_heatmap[i] -= 5;
@@ -1468,18 +1474,19 @@ int main() {
             }
         }
 
-        cpu_accumulator += delta_seconds * cpu_speed;
-
         if (step_by_step_mode) {
             cpu_accumulator = 0;
+        } else {
+            cpu_accumulator += delta_seconds * cpu_speed;
         }
+
         if (step_one_instruction && step_by_step_mode) {
-            step_one_cycle();
+            stepOneСycle();
             step_one_instruction = false;
         }
 
         while (cpu_accumulator >= 1.0) {
-            step_one_cycle();
+            stepOneСycle();
             cpu_accumulator -= 1.0;
         }
 
@@ -1488,7 +1495,6 @@ int main() {
 
     CloseAudioDevice();
     CloseWindow();
-    free(screen);
     free(message_box_title);
     free(message_box_message);
     free(message_box_buttons); 
